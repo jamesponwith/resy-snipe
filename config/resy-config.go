@@ -30,10 +30,10 @@ var ResyKeyss = ResyKeys{ApiKey: "VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5", AuthToken: 
 var SnipeTimee = SnipeTime{Hours: 0, Minutes: 0}
 var tableType = "Dining Room"
 var ResTimeTypes = []ReservationTimeType{
+    NewReservationTimeType("18:45:00", nil),
     NewReservationTimeType("19:00:00", nil),
     NewReservationTimeType("19:15:00", nil),
     NewReservationTimeType("19:30:00", nil),
-    NewReservationTimeType("18:45:00", nil),
     NewReservationTimeType("18:30:00", nil),
     NewReservationTimeType("18:30:00", &tableType),
 }
