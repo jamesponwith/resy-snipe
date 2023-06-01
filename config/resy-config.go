@@ -29,11 +29,14 @@ func NewReservationTimeType(reservationTime string, tableType *string) Reservati
 var ResyKeyss = ResyKeys{ApiKey: "VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5", AuthToken: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjE2ODY4MzgzODIsInVpZCI6NjA2NzA3OCwiZ3QiOiJjb25zdW1lciIsImdzIjpbXSwibGFuZyI6ImVuLXVzIiwiZXh0cmEiOnsiZ3Vlc3RfaWQiOjMwODc3NDAwfX0.AWZVaVaN3d3ivapUw-V7gxBSgA0exv0hLPW_lD3fkN9sqa2dB_bIOYhwzEwV7wsrj14XDpGm62i77OiNdmEARe1mAJpUzGk0LVa3ubxPCrWumh9l1cBvUXr_OV8rEwcixCbViwbyYatT6OM4It_ZfIRHneJOcDkeWxeUWYpF4kl_aP_w"}
 var SnipeTimee = SnipeTime{Hours: 0, Minutes: 0}
 // var tableType = "Dining Room"
-var tableType = "Taproom Table"
+// var tableType = "Taproom Table"
 var ResTimeTypes = []ReservationTimeType{
-    NewReservationTimeType("12:15:00", &tableType),
-    NewReservationTimeType("12:00:00", nil),
-    NewReservationTimeType("12:30:00", nil),
+    NewReservationTimeType("11:00:00", nil),
+    NewReservationTimeType("11:15:00", nil),
+    NewReservationTimeType("11:30:00", nil),
+    // NewReservationTimeType("12:15:00", &tableType),
+    // NewReservationTimeType("16:00:00", nil),
+    // NewReservationTimeType("12:30:00", nil),
     // NewReservationTimeType("19:15:00", nil),
     // NewReservationTimeType("19:30:00", nil),
     // NewReservationTimeType("18:30:00", nil),
@@ -42,6 +45,7 @@ var ResTimeTypes = []ReservationTimeType{
 
 // DeadRabbit: 38660
 // Rubirosa: 466
+// Red Pearl: 69820
 var ReservationDetailss = ReservationDetails{
     Date:         "2023-06-04",
     PartySize:    2,
