@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"resy-snipe/internal/alerts"
 	"resy-snipe/internal/clock"
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/engine"
@@ -27,11 +28,9 @@ type fakeProvider struct {
 
 	calendarCalls atomic.Int32
 	findCalls     atomic.Int32
-	alertCalls    atomic.Int32
 
 	calendarFn func(ctx context.Context, ref domain.VenueRef, r providers.DateRange) (providers.Calendar, error)
 	findFn     func(ctx context.Context, req providers.FindRequest) ([]providers.Slot, error)
-	alertFn    func(ctx context.Context, req providers.AlertRequest) (providers.AlertState, error)
 }
 
 func (*fakeProvider) ID() domain.ProviderID { return "resy" }
@@ -71,18 +70,36 @@ func (f *fakeProvider) Find(ctx context.Context, req providers.FindRequest) ([]p
 	}
 	return fn(ctx, req)
 }
-func (f *fakeProvider) PollAlerts(ctx context.Context, req providers.AlertRequest) (providers.AlertState, error) {
-	f.alertCalls.Add(1)
-	f.mu.Lock()
-	fn := f.alertFn
-	f.mu.Unlock()
-	if fn == nil {
-		return providers.AlertState{}, errors.New("fake: no alertFn set")
-	}
-	return fn(ctx, req)
+
+// countingAlertSource wraps an alerts.Source so tests can drive the
+// engine via the same advanceToCallCount helper used by Calendar/Find.
+type countingAlertSource struct {
+	inner alerts.Source
+	calls atomic.Int32
 }
 
+func (c *countingAlertSource) Poll(ctx context.Context, req alerts.Request) (alerts.State, error) {
+	c.calls.Add(1)
+	return c.inner.Poll(ctx, req)
+}
+func (c *countingAlertSource) MinPollInterval() time.Duration { return c.inner.MinPollInterval() }
+func (c *countingAlertSource) Close() error                   { return c.inner.Close() }
+
+// stubErrAlertSource always returns the supplied error.
+type stubErrAlertSource struct{ err error }
+
+func (s stubErrAlertSource) Poll(context.Context, alerts.Request) (alerts.State, error) {
+	return alerts.State{}, s.err
+}
+func (stubErrAlertSource) MinPollInterval() time.Duration { return 100 * time.Millisecond }
+func (stubErrAlertSource) Close() error                   { return nil }
+
 func newReleaseFixture(t *testing.T, fp *fakeProvider) (*engine.Engine, *clock.Fake, store.Store) {
+	t.Helper()
+	return newReleaseFixtureWithSource(t, fp, nil)
+}
+
+func newReleaseFixtureWithSource(t *testing.T, fp *fakeProvider, src alerts.Source) (*engine.Engine, *clock.Fake, store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(context.Background(), dir+"/release.db")
@@ -99,6 +116,9 @@ func newReleaseFixture(t *testing.T, fp *fakeProvider) (*engine.Engine, *clock.F
 	opts := []engine.Option{}
 	if fp != nil {
 		opts = append(opts, engine.WithProvider(fp))
+	}
+	if src != nil {
+		opts = append(opts, engine.WithAlertSource(src))
 	}
 	eng := engine.New(s, c, discardLogger(), opts...)
 	return eng, c, s
@@ -360,18 +380,26 @@ func TestStrategyRequiresProviderForPolling(t *testing.T) {
 	}
 }
 
+func TestNotifyMeReleaseRequiresAlertSource(t *testing.T) {
+	t.Parallel()
+	eng, fake, _ := newReleaseFixture(t, nil)
+
+	if _, err := eng.Submit(context.Background(), "snp_nm_no_src",
+		notifyMeIntent(fake.Now(), fake.Now().Add(time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	err := eng.Run(context.Background(), "snp_nm_no_src")
+	if err == nil {
+		t.Fatal("expected error without AlertSource")
+	}
+}
+
 func TestNotifyMeReleaseFiresOnAlert(t *testing.T) {
 	t.Parallel()
-	fp := &fakeProvider{}
+	mem := alerts.NewMemorySource(100 * time.Millisecond)
+	src := &countingAlertSource{inner: mem}
 
-	// First call: enrolled, no hit. Second call: alert fires.
-	var calls atomic.Int32
-	fp.alertFn = func(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
-		n := calls.Add(1)
-		return providers.AlertState{Fired: n >= 2}, nil
-	}
-
-	eng, fake, s := newReleaseFixture(t, fp)
+	eng, fake, s := newReleaseFixtureWithSource(t, nil, src)
 	probeFrom := fake.Now().Add(time.Second)
 	probeUntil := fake.Now().Add(time.Hour)
 
@@ -382,8 +410,12 @@ func TestNotifyMeReleaseFiresOnAlert(t *testing.T) {
 
 	fut := driveRunInBackground(t, eng, "snp_nm_hit")
 
-	advanceToCallCount(t, fake, &fp.alertCalls, 1)
-	advanceToCallCount(t, fake, &fp.alertCalls, 2)
+	// First poll: unfired. Then fire the alert and let one more poll
+	// land to observe it.
+	advanceToCallCount(t, fake, &src.calls, 1)
+	mem.Fire("u1", domain.VenueRef{Provider: "resy", Ref: "38660"},
+		domain.NewDate(2026, time.June, 1), 2, fake.Now())
+	advanceToCallCount(t, fake, &src.calls, 2)
 
 	if err := fut.Wait(t, 2*time.Second); err != nil {
 		t.Fatalf("Run err: %v", err)
@@ -400,12 +432,9 @@ func TestNotifyMeReleaseFiresOnAlert(t *testing.T) {
 
 func TestNotifyMeReleaseExpiresWhenWindowCloses(t *testing.T) {
 	t.Parallel()
-	fp := &fakeProvider{}
-	fp.alertFn = func(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
-		return providers.AlertState{Fired: false}, nil
-	}
+	mem := alerts.NewMemorySource(100 * time.Millisecond)
 
-	eng, fake, s := newReleaseFixture(t, fp)
+	eng, fake, s := newReleaseFixtureWithSource(t, nil, mem)
 	probeFrom := fake.Now()
 	probeUntil := fake.Now().Add(500 * time.Millisecond)
 
@@ -436,12 +465,9 @@ func TestNotifyMeReleaseExpiresWhenWindowCloses(t *testing.T) {
 
 func TestNotifyMeReleaseFailsOnEnrollmentRequired(t *testing.T) {
 	t.Parallel()
-	fp := &fakeProvider{}
-	fp.alertFn = func(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
-		return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
-	}
+	src := stubErrAlertSource{err: alerts.ErrEnrollmentRequired}
 
-	eng, fake, s := newReleaseFixture(t, fp)
+	eng, fake, s := newReleaseFixtureWithSource(t, nil, src)
 
 	if _, err := eng.Submit(context.Background(), "snp_nm_enr",
 		notifyMeIntent(fake.Now(), fake.Now().Add(time.Hour))); err != nil {
@@ -460,6 +486,54 @@ func TestNotifyMeReleaseFailsOnEnrollmentRequired(t *testing.T) {
 	}
 	if loaded.Status() != domain.StatusFailed {
 		t.Errorf("status: %s want failed (enrollment required)", loaded.Status())
+	}
+}
+
+// TestNotifyMeReleaseHonorsPerQuestInterval verifies that PollInterval
+// on the strategy is the gap the engine waits between Polls — and
+// that the MinPollInterval clamp from the source raises a too-small
+// value to the floor.
+func TestNotifyMeReleaseHonorsPerQuestInterval(t *testing.T) {
+	t.Parallel()
+	// Source floor is 200ms; quest asks for 50ms. Engine must clamp
+	// to 200ms.
+	mem := alerts.NewMemorySource(200 * time.Millisecond)
+	src := &countingAlertSource{inner: mem}
+
+	eng, fake, _ := newReleaseFixtureWithSource(t, nil, src)
+	probeFrom := fake.Now()
+	probeUntil := fake.Now().Add(time.Hour)
+
+	intent := notifyMeIntent(probeFrom, probeUntil)
+	r := intent.Release.(domain.NotifyMeRelease)
+	r.PollInterval = 50 * time.Millisecond // below floor
+	intent.Release = r
+
+	if _, err := eng.Submit(context.Background(), "snp_nm_int", intent); err != nil {
+		t.Fatal(err)
+	}
+	fut := driveRunInBackground(t, eng, "snp_nm_int")
+	t.Cleanup(func() { _ = fut })
+
+	// First poll happens immediately. Advance 100ms — should NOT
+	// trigger a second poll (floor is 200ms). Advance another 100ms
+	// — should trigger.
+	advanceToCallCount(t, fake, &src.calls, 1)
+	fake.Advance(100 * time.Millisecond)
+	runtime.Gosched()
+	if got := src.calls.Load(); got != 1 {
+		t.Errorf("under-floor advance triggered a poll: calls=%d", got)
+	}
+	fake.Advance(150 * time.Millisecond)
+	advanceToCallCount(t, fake, &src.calls, 2)
+
+	// Fire the alert so the goroutine doesn't leak; window expiry
+	// would also work but is slower.
+	mem.Fire("u1", domain.VenueRef{Provider: "resy", Ref: "38660"},
+		domain.NewDate(2026, time.June, 1), 2, fake.Now())
+	advanceToCallCount(t, fake, &src.calls, 3)
+	if err := fut.Wait(t, 2*time.Second); err != nil {
+		t.Fatalf("Run err: %v", err)
 	}
 }
 

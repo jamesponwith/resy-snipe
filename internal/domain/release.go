@@ -32,16 +32,22 @@ type ContinuousRelease struct {
 
 func (ContinuousRelease) isReleaseStrategy() {}
 
-// NotifyMeRelease polls the provider's per-account alert-state surface
-// (Resy: the NotifyMe enrollment + alert feed) between ProbeFrom and
-// ProbeUntil. The engine transitions Awaiting the moment the alert
-// fires for the target (venue, date) pair. Unlike ContinuousRelease,
-// which hammers Find, this strategy hits the account-side alert
-// endpoint — fewer requests, lower anti-bot exposure, but requires the
-// caller to have an active NotifyMe enrollment for the venue+date.
+// NotifyMeRelease polls an alerts.Source between ProbeFrom and
+// ProbeUntil for a fire matching the target (user, venue, date). The
+// concrete origin is decoupled from the booking provider — v1's
+// primary source is internal/alerts/email (IMAP-monitored Resy
+// NotifyMe emails); future sources may include webhooks or a Resy-API
+// alert endpoint.
+//
+// PollInterval lets hot targets poll faster than the engine's default
+// PollFloor; the AlertSource's MinPollInterval is a hard floor. Zero
+// falls back to engine policy. Sources can also be near-instant
+// (IMAP IDLE, webhook) — for those, PollInterval is the cache-check
+// cadence, not a round-trip rate.
 type NotifyMeRelease struct {
-	ProbeFrom  time.Time
-	ProbeUntil time.Time
+	ProbeFrom    time.Time
+	ProbeUntil   time.Time
+	PollInterval time.Duration
 }
 
 func (NotifyMeRelease) isReleaseStrategy() {}

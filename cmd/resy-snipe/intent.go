@@ -42,6 +42,7 @@ type cliOptions struct {
 	snipeTime       string
 	releaseStrategy string
 	retryWindow     time.Duration
+	pollInterval    time.Duration
 	logLevel        string
 	// user is the email address that identifies which persisted
 	// session to load before running a snipe. When empty, the snipe
@@ -91,6 +92,8 @@ func parseFlags(args []string, out io.Writer) (cliOptions, error) {
 		"Release strategy: explicit|discovered|continuous|notify-me. Default: explicit if -snipe-time given, else discovered.")
 	fs.DurationVar(&opts.retryWindow, "retry-window", defaultRetryWindow,
 		"Bounds the engine's polling window for ContinuousRelease and the probe span for DiscoveredRelease.")
+	fs.DurationVar(&opts.pollInterval, "poll-interval", 0,
+		"Per-target poll cadence for -release-strategy=notify-me. Zero falls back to engine PollFloor; the AlertSource's MinPollInterval is a hard floor.")
 	fs.StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	fs.StringVar(&opts.user, "user", "",
 		"Email of the previously logged-in user; loads the persisted Resy session. "+
@@ -453,12 +456,14 @@ func buildRelease(opts cliOptions, now time.Time) (domain.ReleaseStrategy, error
 		// variant beyond providing a deadline anchor.
 		return domain.ContinuousRelease{Until: now.Add(opts.retryWindow)}, nil
 	case strategyNotifyMe:
-		// NotifyMeRelease polls the account-side alert surface from now
-		// until retry-window elapses. Like Continuous, the snipe time
-		// only acts as a deadline anchor; the alert fires when it fires.
+		// NotifyMeRelease watches the configured alerts.Source (email
+		// IMAP by default) from now until retry-window elapses. Like
+		// Continuous, the snipe time only acts as a deadline anchor;
+		// the alert fires when it fires.
 		return domain.NotifyMeRelease{
-			ProbeFrom:  now,
-			ProbeUntil: now.Add(opts.retryWindow),
+			ProbeFrom:    now,
+			ProbeUntil:   now.Add(opts.retryWindow),
+			PollInterval: opts.pollInterval,
 		}, nil
 	default:
 		return nil, fmt.Errorf("invalid -release-strategy %q (want explicit|discovered|continuous|notify-me)", opts.releaseStrategy)

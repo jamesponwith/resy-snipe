@@ -187,7 +187,11 @@ func releaseSummary(r domain.ReleaseStrategy) string {
 	case domain.ContinuousRelease:
 		return "continuous→" + v.Until.Format(time.RFC3339)
 	case domain.NotifyMeRelease:
-		return "notify_me[" + v.ProbeFrom.Format(time.RFC3339) + "→" + v.ProbeUntil.Format(time.RFC3339) + "]"
+		out := "notify_me[" + v.ProbeFrom.Format(time.RFC3339) + "→" + v.ProbeUntil.Format(time.RFC3339) + "]"
+		if v.PollInterval > 0 {
+			out += "@" + v.PollInterval.String()
+		}
+		return out
 	default:
 		return "<unknown>"
 	}

@@ -92,10 +92,6 @@ func (f *fakeProvider) Book(_ context.Context, _ providers.Slot, _ providers.Ses
 	return providers.Confirmation{}, errors.New("unused")
 }
 
-func (f *fakeProvider) PollAlerts(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
-	return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
-}
-
 func (f *fakeProvider) calls() (resolve, search int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

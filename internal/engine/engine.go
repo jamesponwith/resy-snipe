@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"resy-snipe/internal/alerts"
 	"resy-snipe/internal/clock"
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/providers"
@@ -22,11 +23,12 @@ import (
 // the structured logger. It is the entry point that the CLI and the
 // future daemon construct.
 type Engine struct {
-	store    store.Store
-	clock    clock.Clock
-	log      *slog.Logger
-	provider providers.Provider
-	policy   domain.BookingPolicy
+	store       store.Store
+	clock       clock.Clock
+	log         *slog.Logger
+	provider    providers.Provider
+	alertSource alerts.Source
+	policy      domain.BookingPolicy
 
 	// Subscriber registry for the lifecycle event stream. See
 	// subscribe.go for the public Subscribe / Notification surface.
@@ -44,6 +46,13 @@ type Option func(*Engine)
 // Without a provider, only ExplicitRelease snipes can run end-to-end;
 // Discovered and Continuous strategies require it.
 func WithProvider(p providers.Provider) Option { return func(e *Engine) { e.provider = p } }
+
+// WithAlertSource supplies the alert origin the engine reads from
+// during a NotifyMeRelease snipe. Without a source, only
+// Explicit/Discovered/Continuous snipes can run end-to-end; NotifyMe
+// requires it. The source is intentionally decoupled from the
+// booking provider — see internal/alerts.
+func WithAlertSource(s alerts.Source) Option { return func(e *Engine) { e.alertSource = s } }
 
 // WithBookingPolicy overrides the engine's default BookingPolicy
 // (PollFloor 100ms, MaxConcurrent 4, DetailsSerial true). The intent

@@ -182,9 +182,10 @@ func canonicalStrategy(r ReleaseStrategy) (map[string]any, error) {
 		}, nil
 	case NotifyMeRelease:
 		return map[string]any{
-			"tag":         "notify_me",
-			"probe_from":  utcNanos(v.ProbeFrom),
-			"probe_until": utcNanos(v.ProbeUntil),
+			"tag":           "notify_me",
+			"probe_from":    utcNanos(v.ProbeFrom),
+			"probe_until":   utcNanos(v.ProbeUntil),
+			"poll_interval": v.PollInterval.String(),
 		}, nil
 	default:
 		return nil, fmt.Errorf("%w: %T", ErrPlanStrategyUnknown, r)

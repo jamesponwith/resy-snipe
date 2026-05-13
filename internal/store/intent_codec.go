@@ -29,11 +29,12 @@ type slotPrefJSON struct {
 // store boundary can roundtrip the sealed union. Only one of the
 // time fields is populated for any given Kind.
 type releaseJSON struct {
-	Kind       string    `json:"kind"`
-	At         time.Time `json:"at,omitzero"`
-	ProbeFrom  time.Time `json:"probe_from,omitzero"`
-	ProbeUntil time.Time `json:"probe_until,omitzero"`
-	Until      time.Time `json:"until,omitzero"`
+	Kind         string        `json:"kind"`
+	At           time.Time     `json:"at,omitzero"`
+	ProbeFrom    time.Time     `json:"probe_from,omitzero"`
+	ProbeUntil   time.Time     `json:"probe_until,omitzero"`
+	Until        time.Time     `json:"until,omitzero"`
+	PollInterval time.Duration `json:"poll_interval,omitempty"`
 }
 
 const (
@@ -117,9 +118,10 @@ func encodeRelease(r domain.ReleaseStrategy) (*releaseJSON, error) {
 		return &releaseJSON{Kind: releaseKindContinuous, Until: v.Until}, nil
 	case domain.NotifyMeRelease:
 		return &releaseJSON{
-			Kind:       releaseKindNotifyMe,
-			ProbeFrom:  v.ProbeFrom,
-			ProbeUntil: v.ProbeUntil,
+			Kind:         releaseKindNotifyMe,
+			ProbeFrom:    v.ProbeFrom,
+			ProbeUntil:   v.ProbeUntil,
+			PollInterval: v.PollInterval,
 		}, nil
 	default:
 		return nil, fmt.Errorf("encodeRelease: unknown variant %T", r)
@@ -139,7 +141,11 @@ func decodeRelease(j *releaseJSON) (domain.ReleaseStrategy, error) {
 	case releaseKindContinuous:
 		return domain.ContinuousRelease{Until: j.Until}, nil
 	case releaseKindNotifyMe:
-		return domain.NotifyMeRelease{ProbeFrom: j.ProbeFrom, ProbeUntil: j.ProbeUntil}, nil
+		return domain.NotifyMeRelease{
+			ProbeFrom:    j.ProbeFrom,
+			ProbeUntil:   j.ProbeUntil,
+			PollInterval: j.PollInterval,
+		}, nil
 	default:
 		return nil, fmt.Errorf("decodeRelease: unknown kind %q", j.Kind)
 	}

@@ -79,29 +79,6 @@ type FindRequest struct {
 	Session   Session
 }
 
-// AlertRequest carries the venue+date pair the engine wants to poll
-// the provider's account-side alert surface for (Resy: the NotifyMe
-// enrollment + alert feed). Session is required: alerts are a
-// per-user resource, not an anonymous one.
-type AlertRequest struct {
-	Venue     domain.VenueRef
-	Date      domain.Date
-	PartySize int
-	Session   Session
-}
-
-// AlertState is the engine-visible snapshot of an account-side alert
-// for a (venue, date) pair. Engine code only consults Fired; the typed
-// surface leaves room for adapters to report supporting data (e.g.,
-// expiration of an enrollment) without re-shaping the seam.
-//
-// Fired==true is a one-way signal: the engine treats it as the release
-// instant for NotifyMeRelease and transitions Awaiting. Adapters may
-// return Fired==false with no error to indicate "enrolled, no hit yet".
-type AlertState struct {
-	Fired bool
-}
-
 // Slot is one open reservation that matched a FindRequest. The engine
 // orders them by user preference, fetches details for each (serially,
 // per BookingPolicy), then races /3/book across the survivors.
@@ -169,17 +146,6 @@ type Provider interface {
 	Calendar(ctx context.Context, ref domain.VenueRef, r DateRange) (Calendar, error)
 	Find(ctx context.Context, req FindRequest) ([]Slot, error)
 	Book(ctx context.Context, slot Slot, sess Session) (Confirmation, error)
-	// PollAlerts reads the provider's account-side alert surface for the
-	// venue+date in req. The NotifyMeRelease engine path calls this on a
-	// PollFloor cadence and transitions Awaiting the first time the
-	// returned AlertState reports Fired==true.
-	//
-	// Returns ErrAlertEnrollmentRequired when the caller has not yet
-	// enrolled for an alert on this (venue, date) pair. Adapters that
-	// auto-enroll on first call may never surface this; ones that
-	// require an out-of-band enrollment step (CLI/MCP-side) use it as
-	// the signal that engine-side polling cannot make progress.
-	PollAlerts(ctx context.Context, req AlertRequest) (AlertState, error)
 }
 
 // Sentinel errors. Engine branches on these via errors.Is; adapters
@@ -233,11 +199,4 @@ var (
 	// shape. It exists so engine/resolver code can branch on a
 	// classifiable parse error without string-matching JSON errors.
 	ErrParseFailure = errors.New("provider: parse failure")
-
-	// ErrAlertEnrollmentRequired indicates PollAlerts was called for a
-	// (venue, date) pair the caller has not enrolled for on the
-	// provider's account-side alert surface. The engine treats this as
-	// terminal for a NotifyMeRelease snipe — there is no transient
-	// recovery path; an out-of-band enrollment step must run first.
-	ErrAlertEnrollmentRequired = errors.New("provider: alert enrollment required")
 )

@@ -2,10 +2,38 @@
 
 `NotifyMeRelease` is the fourth release strategy
 ([`release-strategies.md`](release-strategies.md)). It lets a snipe
-sit dormant until Resy's NotifyMe alert fires for the target
-(venue, date), then transitions straight into the booking race. The
-intended use case is **catching cancellations and post-drop openings
-without paying the anti-bot cost of polling `/4/find`**.
+sit dormant until an external alert fires for the target
+(user, venue, date), then transitions straight into the booking race.
+The intended use case is **catching cancellations and post-drop
+openings without paying the anti-bot cost of polling `/4/find`**.
+
+## Architecture
+
+The engine reads from an `alerts.Source` ([`internal/alerts`](../internal/alerts/alerts.go)).
+The Source is intentionally decoupled from the booking provider —
+booking still goes through Resy, but the signal that says "an opening
+exists" can come from anywhere.
+
+```
+  domain.NotifyMeRelease           internal/alerts
+  ┌──────────────────┐             ┌────────────────────┐
+  │ ProbeFrom        │             │ Source.Poll(req)   │◀── engine loop
+  │ ProbeUntil       │             │ State{Fired,...}   │
+  │ PollInterval     │ ───────────▶│ MinPollInterval()  │
+  └──────────────────┘             │ Close()            │
+                                   └─────────┬──────────┘
+                                             │
+                  ┌──────────────────────────┼──────────────────────────┐
+                  ▼                          ▼                          ▼
+          alerts.MemorySource     alerts/email.Source       (future: Resy API,
+          (tests, webhook         (IMAP → parse → cache)     webhook receiver)
+           in-memory)
+```
+
+v1's primary Source is `internal/alerts/email`: watch a mailbox for
+Resy NotifyMe emails, parse out (venue, date), match against active
+quests. **The IMAP loop and the email parser are stubbed** pending a
+real-email sample — `Poll` currently returns `ErrSourceNotImplemented`.
 
 ## State machine
 
@@ -18,13 +46,13 @@ Scheduled  →  Discovering  →  Awaiting  →  Finding → Booking → Booked
    |              ↓
    |           Failed (reason=notify_me_window_expired)
    |
-   | (PollAlerts returns ErrAlertEnrollmentRequired)
+   | (Source returns ErrEnrollmentRequired)
    ↓
 Failed (reason=notify_me_enrollment_required)
 ```
 
-`Discovering` carries `via=notify_me` on its event attrs to distinguish
-it from a `DiscoveredRelease` discovering event.
+`Discovering` carries `via=notify_me` on its event attrs to
+distinguish it from a `DiscoveredRelease` discovering event.
 
 ## CLI
 
@@ -34,71 +62,82 @@ resy-snipe \
   -res-times 19:00,19:30 \
   -release-strategy notify-me \
   -retry-window 4h \
+  -poll-interval 5s \
   -user you@example.com
 ```
 
-`-retry-window` becomes the `ProbeUntil − ProbeFrom` span. `ProbeFrom`
-defaults to `now`, so polling starts immediately and gives up after
-`retry-window` elapses.
+`-retry-window` is the `ProbeUntil − ProbeFrom` span. `-poll-interval`
+is the per-quest cadence; zero falls back to engine `PollFloor`. The
+AlertSource's `MinPollInterval` is a **hard floor** — a quest can't
+poll faster than the origin allows (IMAP politeness, anti-bot).
 
 ## Anti-bot trade-off
 
-| Strategy | Endpoint | Anti-bot exposure |
+| Strategy | Origin | Anti-bot exposure |
 |---|---|---|
 | Explicit | One `Find` at fire time | Lowest |
 | Discovered | `Calendar` every PollFloor | Low–medium |
-| **NotifyMe** | `PollAlerts` every PollFloor | **Low** (account endpoint) |
+| **NotifyMe** | **External signal** (email/webhook) | **None** (no Resy traffic until Awaiting) |
 | Continuous | `Find` every PollFloor | Highest |
 
-Find is the most-watched endpoint on Resy's surface. The NotifyMe
-alert surface is account-bound and tied to a feature Resy expects
-users to lean on heavily, so it's significantly more permissive.
+NotifyMe is the only strategy that issues **zero pre-fire requests to
+Resy**: all polling happens against the AlertSource (mailbox, webhook
+receiver). Resy first sees us in the booking race, after the alert.
 
 ## Implementation status
 
-**Engine side: complete.** State machine, dispatch, audit events, ctx
-cancellation, expiry, and enrollment-required classification are all
-wired and tested
-([`internal/engine/release.go`](../internal/engine/release.go),
-[`internal/engine/release_test.go`](../internal/engine/release_test.go)).
+**Engine + alerts seam: complete.**
+- `internal/alerts` defines the Source interface, sentinels, and a
+  `MemorySource` for tests and webhook-driven delivery.
+- `engine.WithAlertSource` wires a Source into the engine.
+- `runNotifyMeRelease` honors `PollInterval`, clamps to the source's
+  `MinPollInterval`, classifies `ErrEnrollmentRequired` as terminal.
 
-**Resy adapter side: stubbed.** The HTTP wire format for the NotifyMe
-alert-state endpoint is not captured in this repo. The stub at
-[`internal/resy/notify_alerts.go`](../internal/resy/notify_alerts.go)
-returns `ErrAlertEnrollmentRequired` so that any caller exercising the
-path fails loudly rather than silently doing nothing.
+**Email Source: scaffolded but stubbed.**
+[`internal/alerts/email/email.go`](../internal/alerts/email/email.go)
+defines the `Config` shape (IMAPAddr, Username, Password, Mailbox,
+SenderFilter), constructor, and `Source` type. `Poll` returns
+`ErrSourceNotImplemented`.
 
-To complete the integration:
+**To finish the email Source:**
 
-1. Identify the endpoint via a packet capture of the Resy mobile app's
-   NotifyMe flow. Candidate paths to watch for: `/3/notify`, `/2/user/notify`.
-2. Map the response shape onto `providers.AlertState{Fired: bool}`.
-   Resy typically uses a per-enrollment state string (e.g.
-   `"pending"` → `"fired"`).
-3. Decide whether `PollAlerts` should auto-enroll on first call or
-   require an explicit `EnrollAlert` provider method. The engine
-   classifies `ErrAlertEnrollmentRequired` as terminal, so explicit
-   enrollment is cleanly accommodated.
-4. Route the request through `doSignedAndRetry` to share the unified
-   anti-bot envelope.
-
-The `providers.Provider` interface, the engine loop, and the CLI flag
-are all stable across this work — only the body of `Client.PollAlerts`
-in `internal/resy/notify_alerts.go` needs to change.
+1. Open a long-lived IMAP connection per Config — `go-imap` or
+   similar. Use IDLE for near-push delivery; fall back to polling on
+   servers without it.
+2. On each new message matching `SenderFilter`, parse subject + body
+   into `(venue, date, party_size)`. The parser belongs in
+   `internal/alerts/email/parse.go` alongside a golden-test fixture
+   from a real Resy NotifyMe email.
+3. Cache fires in a map keyed by `(User, VenueRef, Date, PartySize)`
+   so `Poll` is an O(1) lookup.
+4. Wire the daemon's secret-loader so `Password` comes from
+   `internal/secrets` rather than CLI flags.
 
 ## Sentinels
 
-- `providers.ErrAlertEnrollmentRequired` — adapter signal that there
-  is no active NotifyMe enrollment for the (venue, date) pair. The
-  engine surfaces this as a `Failed` event with
-  `reason=notify_me_enrollment_required` so the CLI/MCP layer can
-  prompt for the out-of-band enrollment step.
+- `alerts.ErrEnrollmentRequired` — Source observed no enrollment for
+  this (user, venue, date). For the email source: no NotifyMe email
+  has ever arrived (the user hasn't tapped "Notify me" in Resy).
+  Engine fails the snipe so the CLI/MCP can prompt for the
+  out-of-band enrollment step.
+- `alerts.ErrSourceUnavailable` — transient transport failure
+  (IMAP disconnect). Engine surfaces it; operator decides retry.
+- `alerts.ErrSourceNotImplemented` — placeholder for scaffolded
+  Sources; classified same as `ErrSourceUnavailable`.
 
 ## Tests
 
-- `TestNotifyMeReleaseFiresOnAlert` — happy path: poll twice, second
-  call returns `Fired:true`, snipe lands in `Awaiting`.
-- `TestNotifyMeReleaseExpiresWhenWindowCloses` — `ProbeUntil` elapses
-  with no fire, snipe lands in `Failed`.
-- `TestNotifyMeReleaseFailsOnEnrollmentRequired` — adapter returns
-  `ErrAlertEnrollmentRequired`, snipe lands in `Failed`.
+- `TestNotifyMeReleaseFiresOnAlert` — Source is a MemorySource;
+  test fires an alert mid-poll and asserts the snipe lands in
+  `Awaiting`.
+- `TestNotifyMeReleaseExpiresWhenWindowCloses` — no fire before
+  `ProbeUntil`; snipe lands in `Failed`.
+- `TestNotifyMeReleaseFailsOnEnrollmentRequired` — Source returns
+  `ErrEnrollmentRequired`; snipe lands in `Failed`.
+- `TestNotifyMeReleaseHonorsPerQuestInterval` — quest asks for 50ms
+  but source floor is 200ms; engine clamps and only polls at the
+  source's pace.
+- `TestNotifyMeReleaseRequiresAlertSource` — `Run` without
+  `WithAlertSource` errors at dispatch rather than at first poll.
+- `internal/alerts/alerts_test.go` — MemorySource unit tests
+  (fired/unfired states, mismatch filtering, MinPollInterval clamp).

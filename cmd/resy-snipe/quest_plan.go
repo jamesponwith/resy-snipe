@@ -488,9 +488,13 @@ func formatStrategy(r domain.ReleaseStrategy) string {
 		return fmt.Sprintf("Continuous (until %s)",
 			v.Until.UTC().Format("2006-01-02T15:04Z"))
 	case domain.NotifyMeRelease:
-		return fmt.Sprintf("NotifyMe (alert-poll %s..%s)",
+		base := fmt.Sprintf("NotifyMe (alert-poll %s..%s)",
 			v.ProbeFrom.UTC().Format("2006-01-02T15:04Z"),
 			v.ProbeUntil.UTC().Format("2006-01-02T15:04Z"))
+		if v.PollInterval > 0 {
+			base += fmt.Sprintf(", interval %s", v.PollInterval)
+		}
+		return base
 	case nil:
 		return "(no strategy)"
 	default:

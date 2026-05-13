@@ -64,8 +64,8 @@ func writeReleaseHash(b *strings.Builder, r ReleaseStrategy) {
 	case ContinuousRelease:
 		fmt.Fprintf(b, "release=continuous until=%s\n", utcNanos(v.Until))
 	case NotifyMeRelease:
-		fmt.Fprintf(b, "release=notify_me from=%s until=%s\n",
-			utcNanos(v.ProbeFrom), utcNanos(v.ProbeUntil))
+		fmt.Fprintf(b, "release=notify_me from=%s until=%s poll=%s\n",
+			utcNanos(v.ProbeFrom), utcNanos(v.ProbeUntil), v.PollInterval)
 	default:
 		// A new ReleaseStrategy variant must update this switch and
 		// appear in the codec/persistence layer. The default branch

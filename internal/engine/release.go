@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"resy-snipe/internal/alerts"
 	"resy-snipe/internal/clock"
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/providers"
@@ -38,8 +39,8 @@ func (e *Engine) runStrategy(ctx context.Context, state *SnipeState) error {
 		}
 		return e.runContinuousRelease(ctx, state, r)
 	case domain.NotifyMeRelease:
-		if e.provider == nil {
-			return errors.New("engine: NotifyMeRelease requires a Provider — pass engine.WithProvider")
+		if e.alertSource == nil {
+			return errors.New("engine: NotifyMeRelease requires an AlertSource — pass engine.WithAlertSource")
 		}
 		return e.runNotifyMeRelease(ctx, state, r)
 	case nil:
@@ -193,18 +194,19 @@ func (e *Engine) advanceToDiscovering(ctx context.Context, state *SnipeState, r 
 	)
 }
 
-// runNotifyMeRelease moves the snipe into Discovering and polls
-// Provider.PollAlerts between ProbeFrom and ProbeUntil. The first
-// AlertState reporting Fired==true transitions the snipe to Awaiting;
-// the booking race then takes over from there.
+// runNotifyMeRelease moves the snipe into Discovering and polls the
+// engine's AlertSource between ProbeFrom and ProbeUntil. The first
+// State reporting Fired==true transitions the snipe to Awaiting; the
+// booking race then takes over.
 //
-// Trade-off vs ContinuousRelease: the account-side alert endpoint is
-// far less anti-bot-sensitive than Find, so the polling floor of
-// 100ms is comfortable here. The cost is that the caller must have
-// an active NotifyMe enrollment for the (venue, date) pair — when the
-// adapter surfaces ErrAlertEnrollmentRequired, the engine fails the
-// snipe rather than spinning (no transient recovery path exists; the
-// enrollment is created out-of-band).
+// Polling cadence: r.PollInterval if non-zero, otherwise the engine's
+// PollFloor — clamped in both cases to the AlertSource's
+// MinPollInterval so a per-quest override can't run below the
+// origin's politeness floor (IMAP server etiquette, anti-bot).
+//
+// Sentinel handling: ErrEnrollmentRequired is terminal — there is no
+// in-loop recovery; the operator must enroll out-of-band. Other
+// source errors propagate up so the operator decides whether to retry.
 func (e *Engine) runNotifyMeRelease(ctx context.Context, state *SnipeState, r domain.NotifyMeRelease) error {
 	if r.ProbeFrom.IsZero() || r.ProbeUntil.IsZero() {
 		return errors.New("engine: NotifyMeRelease requires ProbeFrom and ProbeUntil")
@@ -224,11 +226,13 @@ func (e *Engine) runNotifyMeRelease(ctx context.Context, state *SnipeState, r do
 	}
 
 	intent := state.Intent()
-	req := providers.AlertRequest{
+	req := alerts.Request{
+		User:      intent.User,
 		Venue:     intent.Venue,
 		Date:      intent.Date,
 		PartySize: intent.PartySize,
 	}
+	interval := e.notifyMePollInterval(r.PollInterval)
 
 	for {
 		if ctx.Err() != nil {
@@ -241,30 +245,45 @@ func (e *Engine) runNotifyMeRelease(ctx context.Context, state *SnipeState, r do
 			)
 		}
 
-		alert, err := e.provider.PollAlerts(ctx, req)
+		alert, err := e.alertSource.Poll(ctx, req)
 		if err != nil {
-			if errors.Is(err, providers.ErrAlertEnrollmentRequired) {
-				// Terminal: no enrollment, no progress. Surface a Failed
-				// event with the enrollment reason so the operator/CLI
-				// can prompt for the out-of-band step.
+			if errors.Is(err, alerts.ErrEnrollmentRequired) {
 				return state.Transition(ctx, domain.StatusFailed, domain.EventFailed,
 					slog.String("reason", "notify_me_enrollment_required"),
 					slog.String(domain.LogKeyVenueRef, intent.Venue.String()),
 				)
 			}
-			return fmt.Errorf("engine: notify_me PollAlerts: %w", err)
+			return fmt.Errorf("engine: notify_me Poll: %w", err)
 		}
 		if alert.Fired {
-			return state.Transition(ctx, domain.StatusAwaiting, domain.EventReleased,
+			attrs := []slog.Attr{
 				slog.String(domain.LogKeyVenueRef, intent.Venue.String()),
 				slog.String("via", "notify_me"),
 				slog.Time("observed_at", e.clock.Now()),
-			)
+			}
+			if !alert.FiredAt.IsZero() {
+				attrs = append(attrs, slog.Time("alert_fired_at", alert.FiredAt))
+			}
+			return state.Transition(ctx, domain.StatusAwaiting, domain.EventReleased, attrs...)
 		}
-		if err := waitWithCtx(ctx, e.clock, e.pollInterval()); err != nil {
+		if err := waitWithCtx(ctx, e.clock, interval); err != nil {
 			return err
 		}
 	}
+}
+
+// notifyMePollInterval picks the effective NotifyMe polling cadence:
+// the per-quest PollInterval when non-zero, else the engine's
+// PollFloor — both clamped to the AlertSource's MinPollInterval.
+func (e *Engine) notifyMePollInterval(quest time.Duration) time.Duration {
+	d := quest
+	if d <= 0 {
+		d = e.policy.PollFloor
+	}
+	if floor := e.alertSource.MinPollInterval(); d < floor {
+		d = floor
+	}
+	return d
 }
 
 // advanceToNotifyDiscovering moves a Scheduled snipe into Discovering

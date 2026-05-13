@@ -97,35 +97,37 @@ Code: [`release.go:runContinuousRelease`](../internal/engine/release.go).
 
 ```go
 type NotifyMeRelease struct {
-    ProbeFrom  time.Time
-    ProbeUntil time.Time
+    ProbeFrom    time.Time
+    ProbeUntil   time.Time
+    PollInterval time.Duration // optional; clamped to AlertSource floor
 }
 ```
 
-Poll `Provider.PollAlerts(AlertRequest)` at `PollFloor` between
-`ProbeFrom` and `ProbeUntil`. The first response with `Fired==true`
-transitions the snipe to `Awaiting`; the booking race then takes over.
+Poll a configured `alerts.Source` between `ProbeFrom` and `ProbeUntil`
+at `PollInterval` (or engine `PollFloor` when zero, clamped to the
+source's `MinPollInterval`). The first response with `Fired==true`
+transitions the snipe to `Awaiting`.
 
-Unlike `ContinuousRelease`, which hammers `Find`, this strategy hits
-the provider's per-account alert surface (Resy: the NotifyMe
-enrollment + alert feed). It assumes the caller already has an active
-NotifyMe enrollment for the (venue, date) pair — when the adapter
-surfaces `ErrAlertEnrollmentRequired`, the engine fails the snipe with
-reason `notify_me_enrollment_required` so the CLI can prompt for the
-out-of-band enrollment step.
+Unlike `ContinuousRelease`, which polls Resy's `Find`, NotifyMe issues
+**no requests to Resy** before the alert lands — the signal comes from
+an external source (email IMAP, webhook, etc.). The engine treats the
+source uniformly via the `alerts.Source` interface
+([`internal/alerts`](../internal/alerts/alerts.go)).
 
 **Use when** you want to capitalize on cancellations and post-drop
-inventory openings without the anti-bot exposure of Find-polling, and
-you have (or can create) a NotifyMe enrollment for the target.
+inventory openings with zero pre-fire Resy traffic. v1's primary
+source is `internal/alerts/email`: watch a mailbox for Resy NotifyMe
+emails and match them against active quests.
 
-**Trade-off**: lowest anti-bot exposure of the polling strategies —
-the account-side alert endpoint is far less watched than `/4/find` —
-but the enrollment is a hard prerequisite. The Resy adapter side of
-`PollAlerts` is currently stubbed; see
-[`notify-me.md`](notify-me.md) for the wire-format status.
+**Trade-off**: zero anti-bot exposure pre-fire, but you need an
+external signal source set up. When the source surfaces
+`ErrEnrollmentRequired`, the engine fails the snipe with reason
+`notify_me_enrollment_required` so the CLI can prompt for the
+out-of-band enrollment (e.g., "tap 'Notify me' in the Resy app").
 
 Code: [`release.go:runNotifyMeRelease`](../internal/engine/release.go);
-adapter stub: [`internal/resy/notify_alerts.go`](../internal/resy/notify_alerts.go).
+sources: [`internal/alerts/`](../internal/alerts/). See
+[`notify-me.md`](notify-me.md) for implementation status.
 
 ## How the engine chooses
 

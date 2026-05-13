@@ -95,10 +95,6 @@ func (*resolveFakeProvider) Book(context.Context, providers.Slot, providers.Sess
 	return providers.Confirmation{}, errors.New("resolveFakeProvider: Book unused")
 }
 
-func (*resolveFakeProvider) PollAlerts(context.Context, providers.AlertRequest) (providers.AlertState, error) {
-	return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
-}
-
 // memResolveCache is an in-memory resolver.CacheStore. The resolver
 // tests in internal/resolver use the same shape; we duplicate it here
 // rather than depend on the test package to avoid an import cycle.

@@ -123,6 +123,10 @@ func TestIntentHashSensitiveToReleaseFields(t *testing.T) {
 		mk(domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(2 * time.Hour)}) {
 		t.Error("NotifyMeRelease.ProbeUntil change did not affect hash")
 	}
+	if mk(domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour)}) ==
+		mk(domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour), PollInterval: 5 * time.Second}) {
+		t.Error("NotifyMeRelease.PollInterval change did not affect hash")
+	}
 }
 
 // Times in equivalent UTC instants but different zones must hash equal,

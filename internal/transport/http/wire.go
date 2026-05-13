@@ -174,11 +174,12 @@ func encodeVenue(v domain.Venue) venueWire {
 // strategyWire is the discriminated wire shape of
 // domain.ReleaseStrategy. Tag ∈ {"explicit","discovered","continuous","notify_me"}.
 type strategyWire struct {
-	Tag        string `json:"tag"`
-	At         string `json:"at,omitempty"`          // explicit
-	ProbeFrom  string `json:"probe_from,omitempty"`  // discovered, notify_me
-	ProbeUntil string `json:"probe_until,omitempty"` // discovered, notify_me
-	Until      string `json:"until,omitempty"`       // continuous
+	Tag          string `json:"tag"`
+	At           string `json:"at,omitempty"`            // explicit
+	ProbeFrom    string `json:"probe_from,omitempty"`    // discovered, notify_me
+	ProbeUntil   string `json:"probe_until,omitempty"`   // discovered, notify_me
+	Until        string `json:"until,omitempty"`         // continuous
+	PollInterval string `json:"poll_interval,omitempty"` // notify_me
 }
 
 func encodeStrategy(s domain.ReleaseStrategy) strategyWire {
@@ -190,7 +191,11 @@ func encodeStrategy(s domain.ReleaseStrategy) strategyWire {
 	case domain.ContinuousRelease:
 		return strategyWire{Tag: "continuous", Until: rfc3339(v.Until)}
 	case domain.NotifyMeRelease:
-		return strategyWire{Tag: "notify_me", ProbeFrom: rfc3339(v.ProbeFrom), ProbeUntil: rfc3339(v.ProbeUntil)}
+		out := strategyWire{Tag: "notify_me", ProbeFrom: rfc3339(v.ProbeFrom), ProbeUntil: rfc3339(v.ProbeUntil)}
+		if v.PollInterval > 0 {
+			out.PollInterval = v.PollInterval.String()
+		}
+		return out
 	default:
 		return strategyWire{Tag: "nil"}
 	}
