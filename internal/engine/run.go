@@ -133,6 +133,8 @@ func (e *Engine) scheduledAtFromIntent(intent domain.Intent) (time.Time, error) 
 		return r.ProbeFrom, nil
 	case domain.ContinuousRelease:
 		return e.clock.Now(), nil
+	case domain.NotifyMeRelease:
+		return r.ProbeFrom, nil
 	case nil:
 		return time.Time{}, errors.New("engine: intent has nil release strategy")
 	default:

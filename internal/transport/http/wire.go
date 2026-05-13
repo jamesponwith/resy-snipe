@@ -172,12 +172,12 @@ func encodeVenue(v domain.Venue) venueWire {
 }
 
 // strategyWire is the discriminated wire shape of
-// domain.ReleaseStrategy. Tag ∈ {"explicit","discovered","continuous"}.
+// domain.ReleaseStrategy. Tag ∈ {"explicit","discovered","continuous","notify_me"}.
 type strategyWire struct {
 	Tag        string `json:"tag"`
 	At         string `json:"at,omitempty"`          // explicit
-	ProbeFrom  string `json:"probe_from,omitempty"`  // discovered
-	ProbeUntil string `json:"probe_until,omitempty"` // discovered
+	ProbeFrom  string `json:"probe_from,omitempty"`  // discovered, notify_me
+	ProbeUntil string `json:"probe_until,omitempty"` // discovered, notify_me
 	Until      string `json:"until,omitempty"`       // continuous
 }
 
@@ -189,6 +189,8 @@ func encodeStrategy(s domain.ReleaseStrategy) strategyWire {
 		return strategyWire{Tag: "discovered", ProbeFrom: rfc3339(v.ProbeFrom), ProbeUntil: rfc3339(v.ProbeUntil)}
 	case domain.ContinuousRelease:
 		return strategyWire{Tag: "continuous", Until: rfc3339(v.Until)}
+	case domain.NotifyMeRelease:
+		return strategyWire{Tag: "notify_me", ProbeFrom: rfc3339(v.ProbeFrom), ProbeUntil: rfc3339(v.ProbeUntil)}
 	default:
 		return strategyWire{Tag: "nil"}
 	}

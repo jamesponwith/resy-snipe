@@ -31,3 +31,17 @@ type ContinuousRelease struct {
 }
 
 func (ContinuousRelease) isReleaseStrategy() {}
+
+// NotifyMeRelease polls the provider's per-account alert-state surface
+// (Resy: the NotifyMe enrollment + alert feed) between ProbeFrom and
+// ProbeUntil. The engine transitions Awaiting the moment the alert
+// fires for the target (venue, date) pair. Unlike ContinuousRelease,
+// which hammers Find, this strategy hits the account-side alert
+// endpoint — fewer requests, lower anti-bot exposure, but requires the
+// caller to have an active NotifyMe enrollment for the venue+date.
+type NotifyMeRelease struct {
+	ProbeFrom  time.Time
+	ProbeUntil time.Time
+}
+
+func (NotifyMeRelease) isReleaseStrategy() {}

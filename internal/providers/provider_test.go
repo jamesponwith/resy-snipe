@@ -39,6 +39,9 @@ func (stubProvider) Find(context.Context, providers.FindRequest) ([]providers.Sl
 func (stubProvider) Book(context.Context, providers.Slot, providers.Session) (providers.Confirmation, error) {
 	return providers.Confirmation{}, providers.ErrSlotTaken
 }
+func (stubProvider) PollAlerts(context.Context, providers.AlertRequest) (providers.AlertState, error) {
+	return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
+}
 
 var _ providers.Provider = stubProvider{}
 
@@ -54,6 +57,7 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		providers.ErrInventoryEmpty,
 		providers.ErrVenueNotFound,
 		providers.ErrParseFailure,
+		providers.ErrAlertEnrollmentRequired,
 	}
 	for i, a := range all {
 		for j, b := range all {
@@ -79,6 +83,7 @@ func TestSentinelClassificationThroughWrap(t *testing.T) {
 		providers.ErrInventoryEmpty,
 		providers.ErrVenueNotFound,
 		providers.ErrParseFailure,
+		providers.ErrAlertEnrollmentRequired,
 	}
 	for _, sentinel := range cases {
 		wrapped := fmt.Errorf("calling /3/book: %w", sentinel)

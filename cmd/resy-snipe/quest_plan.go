@@ -487,6 +487,10 @@ func formatStrategy(r domain.ReleaseStrategy) string {
 	case domain.ContinuousRelease:
 		return fmt.Sprintf("Continuous (until %s)",
 			v.Until.UTC().Format("2006-01-02T15:04Z"))
+	case domain.NotifyMeRelease:
+		return fmt.Sprintf("NotifyMe (alert-poll %s..%s)",
+			v.ProbeFrom.UTC().Format("2006-01-02T15:04Z"),
+			v.ProbeUntil.UTC().Format("2006-01-02T15:04Z"))
 	case nil:
 		return "(no strategy)"
 	default:

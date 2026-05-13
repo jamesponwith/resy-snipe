@@ -327,6 +327,9 @@ func (fakeProvider) Find(context.Context, providers.FindRequest) ([]providers.Sl
 func (fakeProvider) Book(context.Context, providers.Slot, providers.Session) (providers.Confirmation, error) {
 	return providers.Confirmation{}, errors.New("unused")
 }
+func (fakeProvider) PollAlerts(context.Context, providers.AlertRequest) (providers.AlertState, error) {
+	return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
+}
 
 // ---- harness -------------------------------------------------------------
 

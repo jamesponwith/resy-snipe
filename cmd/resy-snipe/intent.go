@@ -25,6 +25,7 @@ const (
 	strategyExplicit   = "explicit"
 	strategyDiscovered = "discovered"
 	strategyContinuous = "continuous"
+	strategyNotifyMe   = "notify-me"
 )
 
 // cliOptions captures the post-parse, pre-validation form of the CLI
@@ -87,7 +88,7 @@ func parseFlags(args []string, out io.Writer) (cliOptions, error) {
 	fs.StringVar(&opts.snipeDate, "snipe-date", "", "Snipe date (YYYY-MM-DD). Defaults to reservation date.")
 	fs.StringVar(&opts.snipeTime, "snipe-time", "", "Snipe time (HH:MM). Defaults to midnight.")
 	fs.StringVar(&opts.releaseStrategy, "release-strategy", "",
-		"Release strategy: explicit|discovered|continuous. Default: explicit if -snipe-time given, else discovered.")
+		"Release strategy: explicit|discovered|continuous|notify-me. Default: explicit if -snipe-time given, else discovered.")
 	fs.DurationVar(&opts.retryWindow, "retry-window", defaultRetryWindow,
 		"Bounds the engine's polling window for ContinuousRelease and the probe span for DiscoveredRelease.")
 	fs.StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn, error")
@@ -451,8 +452,16 @@ func buildRelease(opts cliOptions, now time.Time) (domain.ReleaseStrategy, error
 		// retry-window. The "snipe time" is irrelevant for this
 		// variant beyond providing a deadline anchor.
 		return domain.ContinuousRelease{Until: now.Add(opts.retryWindow)}, nil
+	case strategyNotifyMe:
+		// NotifyMeRelease polls the account-side alert surface from now
+		// until retry-window elapses. Like Continuous, the snipe time
+		// only acts as a deadline anchor; the alert fires when it fires.
+		return domain.NotifyMeRelease{
+			ProbeFrom:  now,
+			ProbeUntil: now.Add(opts.retryWindow),
+		}, nil
 	default:
-		return nil, fmt.Errorf("invalid -release-strategy %q (want explicit|discovered|continuous)", opts.releaseStrategy)
+		return nil, fmt.Errorf("invalid -release-strategy %q (want explicit|discovered|continuous|notify-me)", opts.releaseStrategy)
 	}
 }
 

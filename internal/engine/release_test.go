@@ -27,9 +27,11 @@ type fakeProvider struct {
 
 	calendarCalls atomic.Int32
 	findCalls     atomic.Int32
+	alertCalls    atomic.Int32
 
 	calendarFn func(ctx context.Context, ref domain.VenueRef, r providers.DateRange) (providers.Calendar, error)
 	findFn     func(ctx context.Context, req providers.FindRequest) ([]providers.Slot, error)
+	alertFn    func(ctx context.Context, req providers.AlertRequest) (providers.AlertState, error)
 }
 
 func (*fakeProvider) ID() domain.ProviderID { return "resy" }
@@ -66,6 +68,16 @@ func (f *fakeProvider) Find(ctx context.Context, req providers.FindRequest) ([]p
 	f.mu.Unlock()
 	if fn == nil {
 		return nil, errors.New("fake: no findFn set")
+	}
+	return fn(ctx, req)
+}
+func (f *fakeProvider) PollAlerts(ctx context.Context, req providers.AlertRequest) (providers.AlertState, error) {
+	f.alertCalls.Add(1)
+	f.mu.Lock()
+	fn := f.alertFn
+	f.mu.Unlock()
+	if fn == nil {
+		return providers.AlertState{}, errors.New("fake: no alertFn set")
 	}
 	return fn(ctx, req)
 }
@@ -111,6 +123,17 @@ func continuousIntent(until time.Time) domain.Intent {
 		PartySize: 2,
 		SlotPrefs: []domain.SlotPreference{{Time: domain.NewWallTime(19, 30, 0)}},
 		Release:   domain.ContinuousRelease{Until: until},
+	}
+}
+
+func notifyMeIntent(probeFrom, probeUntil time.Time) domain.Intent {
+	return domain.Intent{
+		User:      "u1",
+		Venue:     domain.VenueRef{Provider: "resy", Ref: "38660"},
+		Date:      domain.NewDate(2026, time.June, 1),
+		PartySize: 2,
+		SlotPrefs: []domain.SlotPreference{{Time: domain.NewWallTime(19, 30, 0)}},
+		Release:   domain.NotifyMeRelease{ProbeFrom: probeFrom, ProbeUntil: probeUntil},
 	}
 }
 
@@ -334,6 +357,109 @@ func TestStrategyRequiresProviderForPolling(t *testing.T) {
 	err := eng.Run(context.Background(), "snp_disc_no_prov")
 	if err == nil {
 		t.Fatal("expected error without provider")
+	}
+}
+
+func TestNotifyMeReleaseFiresOnAlert(t *testing.T) {
+	t.Parallel()
+	fp := &fakeProvider{}
+
+	// First call: enrolled, no hit. Second call: alert fires.
+	var calls atomic.Int32
+	fp.alertFn = func(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
+		n := calls.Add(1)
+		return providers.AlertState{Fired: n >= 2}, nil
+	}
+
+	eng, fake, s := newReleaseFixture(t, fp)
+	probeFrom := fake.Now().Add(time.Second)
+	probeUntil := fake.Now().Add(time.Hour)
+
+	if _, err := eng.Submit(context.Background(), "snp_nm_hit",
+		notifyMeIntent(probeFrom, probeUntil)); err != nil {
+		t.Fatal(err)
+	}
+
+	fut := driveRunInBackground(t, eng, "snp_nm_hit")
+
+	advanceToCallCount(t, fake, &fp.alertCalls, 1)
+	advanceToCallCount(t, fake, &fp.alertCalls, 2)
+
+	if err := fut.Wait(t, 2*time.Second); err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+
+	loaded, err := s.GetSnipe(context.Background(), "snp_nm_hit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status() != domain.StatusAwaiting {
+		t.Errorf("status: %s want awaiting", loaded.Status())
+	}
+}
+
+func TestNotifyMeReleaseExpiresWhenWindowCloses(t *testing.T) {
+	t.Parallel()
+	fp := &fakeProvider{}
+	fp.alertFn = func(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
+		return providers.AlertState{Fired: false}, nil
+	}
+
+	eng, fake, s := newReleaseFixture(t, fp)
+	probeFrom := fake.Now()
+	probeUntil := fake.Now().Add(500 * time.Millisecond)
+
+	if _, err := eng.Submit(context.Background(), "snp_nm_exp",
+		notifyMeIntent(probeFrom, probeUntil)); err != nil {
+		t.Fatal(err)
+	}
+
+	fut := driveRunInBackground(t, eng, "snp_nm_exp")
+
+	for range 8 {
+		fake.Advance(100 * time.Millisecond)
+		runtime.Gosched()
+	}
+
+	if err := fut.Wait(t, 2*time.Second); err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+
+	loaded, err := s.GetSnipe(context.Background(), "snp_nm_exp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status() != domain.StatusFailed {
+		t.Errorf("status: %s want failed (window closed)", loaded.Status())
+	}
+}
+
+func TestNotifyMeReleaseFailsOnEnrollmentRequired(t *testing.T) {
+	t.Parallel()
+	fp := &fakeProvider{}
+	fp.alertFn = func(_ context.Context, _ providers.AlertRequest) (providers.AlertState, error) {
+		return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
+	}
+
+	eng, fake, s := newReleaseFixture(t, fp)
+
+	if _, err := eng.Submit(context.Background(), "snp_nm_enr",
+		notifyMeIntent(fake.Now(), fake.Now().Add(time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+
+	fut := driveRunInBackground(t, eng, "snp_nm_enr")
+
+	if err := fut.Wait(t, 2*time.Second); err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+
+	loaded, err := s.GetSnipe(context.Background(), "snp_nm_enr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status() != domain.StatusFailed {
+		t.Errorf("status: %s want failed (enrollment required)", loaded.Status())
 	}
 }
 

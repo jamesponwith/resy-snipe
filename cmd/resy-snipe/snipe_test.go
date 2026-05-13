@@ -61,6 +61,10 @@ func (*snipeFakeProvider) Book(context.Context, providers.Slot, providers.Sessio
 	return providers.Confirmation{}, errors.New("snipeFakeProvider: Book unused — Prepare/Confirm path expected")
 }
 
+func (*snipeFakeProvider) PollAlerts(context.Context, providers.AlertRequest) (providers.AlertState, error) {
+	return providers.AlertState{}, providers.ErrAlertEnrollmentRequired
+}
+
 func (f *snipeFakeProvider) Find(_ context.Context, req providers.FindRequest) ([]providers.Slot, error) {
 	f.findCalls.Add(1)
 	return []providers.Slot{{

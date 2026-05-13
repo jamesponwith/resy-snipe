@@ -14,6 +14,7 @@ var (
 	_ domain.ReleaseStrategy = domain.ExplicitRelease{}
 	_ domain.ReleaseStrategy = domain.DiscoveredRelease{}
 	_ domain.ReleaseStrategy = domain.ContinuousRelease{}
+	_ domain.ReleaseStrategy = domain.NotifyMeRelease{}
 )
 
 // Engine code will pattern-match release strategies via a type switch.
@@ -27,6 +28,7 @@ func TestReleaseStrategySwitchExhaustive(t *testing.T) {
 		domain.ExplicitRelease{At: at},
 		domain.DiscoveredRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour)},
 		domain.ContinuousRelease{Until: at.Add(24 * time.Hour)},
+		domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour)},
 	}
 	for _, r := range cases {
 		switch v := r.(type) {
@@ -41,6 +43,10 @@ func TestReleaseStrategySwitchExhaustive(t *testing.T) {
 		case domain.ContinuousRelease:
 			if v.Until.IsZero() {
 				t.Errorf("ContinuousRelease.Until is zero")
+			}
+		case domain.NotifyMeRelease:
+			if v.ProbeFrom.IsZero() || v.ProbeUntil.IsZero() {
+				t.Errorf("NotifyMeRelease has zero probe bounds: %+v", v)
 			}
 		default:
 			t.Fatalf("unhandled ReleaseStrategy variant %T — engine type switch must be updated", r)
@@ -65,16 +71,27 @@ func TestIntentHashIncludesReleaseVariant(t *testing.T) {
 	discovered.Release = domain.DiscoveredRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour)}
 	continuous := base
 	continuous.Release = domain.ContinuousRelease{Until: at}
+	notify := base
+	notify.Release = domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour)}
 
-	h1 := explicit.Hash()
-	h2 := discovered.Hash()
-	h3 := continuous.Hash()
-	if h1 == h2 || h2 == h3 || h1 == h3 {
-		t.Fatalf("variants collide: explicit=%s discovered=%s continuous=%s", h1, h2, h3)
+	hs := []domain.IntentHash{
+		explicit.Hash(),
+		discovered.Hash(),
+		continuous.Hash(),
+		notify.Hash(),
+	}
+	for i := range hs {
+		for j := i + 1; j < len(hs); j++ {
+			if hs[i] == hs[j] {
+				t.Fatalf("variant hash collision at %d/%d", i, j)
+			}
+		}
 	}
 	hNil := base.Hash()
-	if hNil == h1 || hNil == h2 || hNil == h3 {
-		t.Fatal("nil release collides with a typed release")
+	for _, h := range hs {
+		if hNil == h {
+			t.Fatal("nil release collides with a typed release")
+		}
 	}
 }
 
@@ -101,6 +118,10 @@ func TestIntentHashSensitiveToReleaseFields(t *testing.T) {
 	if mk(domain.ContinuousRelease{Until: at}) ==
 		mk(domain.ContinuousRelease{Until: at.Add(time.Hour)}) {
 		t.Error("ContinuousRelease.Until change did not affect hash")
+	}
+	if mk(domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(time.Hour)}) ==
+		mk(domain.NotifyMeRelease{ProbeFrom: at, ProbeUntil: at.Add(2 * time.Hour)}) {
+		t.Error("NotifyMeRelease.ProbeUntil change did not affect hash")
 	}
 }
 

@@ -190,6 +190,18 @@ func fireScheduleFor(
 		}
 		return v.ProbeFrom.UTC(), schedule
 
+	case domain.NotifyMeRelease:
+		// NotifyMe: same shape as Discovered — DropMoment is the start
+		// of the alert-poll window, schedule entries pinned to the
+		// window center as placeholders for the actual observed fire
+		// instant.
+		center := v.ProbeFrom.Add(v.ProbeUntil.Sub(v.ProbeFrom) / 2).UTC()
+		schedule := make([]time.Time, len(slots))
+		for i := range slots {
+			schedule[i] = center
+		}
+		return v.ProbeFrom.UTC(), schedule
+
 	default:
 		// Defensive: an unknown strategy variant should never reach
 		// BuildPlan — SelectStrategy is exhaustive over the sealed

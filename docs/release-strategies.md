@@ -93,6 +93,40 @@ Find is the most anti-bot-watched endpoint; the engine clamps
 
 Code: [`release.go:runContinuousRelease`](../internal/engine/release.go).
 
+## NotifyMeRelease
+
+```go
+type NotifyMeRelease struct {
+    ProbeFrom  time.Time
+    ProbeUntil time.Time
+}
+```
+
+Poll `Provider.PollAlerts(AlertRequest)` at `PollFloor` between
+`ProbeFrom` and `ProbeUntil`. The first response with `Fired==true`
+transitions the snipe to `Awaiting`; the booking race then takes over.
+
+Unlike `ContinuousRelease`, which hammers `Find`, this strategy hits
+the provider's per-account alert surface (Resy: the NotifyMe
+enrollment + alert feed). It assumes the caller already has an active
+NotifyMe enrollment for the (venue, date) pair — when the adapter
+surfaces `ErrAlertEnrollmentRequired`, the engine fails the snipe with
+reason `notify_me_enrollment_required` so the CLI can prompt for the
+out-of-band enrollment step.
+
+**Use when** you want to capitalize on cancellations and post-drop
+inventory openings without the anti-bot exposure of Find-polling, and
+you have (or can create) a NotifyMe enrollment for the target.
+
+**Trade-off**: lowest anti-bot exposure of the polling strategies —
+the account-side alert endpoint is far less watched than `/4/find` —
+but the enrollment is a hard prerequisite. The Resy adapter side of
+`PollAlerts` is currently stubbed; see
+[`notify-me.md`](notify-me.md) for the wire-format status.
+
+Code: [`release.go:runNotifyMeRelease`](../internal/engine/release.go);
+adapter stub: [`internal/resy/notify_alerts.go`](../internal/resy/notify_alerts.go).
+
 ## How the engine chooses
 
 `engine.Run` ([`run.go`](../internal/engine/run.go)) type-switches on
@@ -102,6 +136,7 @@ Code: [`release.go:runContinuousRelease`](../internal/engine/release.go).
 ExplicitRelease    → wait until r.At, then Awaiting (no polling)
 DiscoveredRelease  → enter Discovering, poll Calendar, then Awaiting
 ContinuousRelease  → poll Find immediately, then Awaiting
+NotifyMeRelease    → enter Discovering, poll PollAlerts, then Awaiting
 ```
 
 On `Awaiting`, control returns to the CLI which calls
@@ -118,4 +153,7 @@ was supplied:
 - otherwise → `DiscoveredRelease` over a `defaultRetryWindow` (30 m)
   centered on now.
 
-The user can always override with `-release-strategy`.
+The user can always override with `-release-strategy={explicit|discovered|continuous|notify-me}`.
+`NotifyMeRelease` is opt-in only: the planner never selects it
+automatically because nothing in `StrategyInput` knows whether the user
+has a NotifyMe enrollment for the venue.

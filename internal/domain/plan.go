@@ -180,6 +180,12 @@ func canonicalStrategy(r ReleaseStrategy) (map[string]any, error) {
 			"tag":   "continuous",
 			"until": utcNanos(v.Until),
 		}, nil
+	case NotifyMeRelease:
+		return map[string]any{
+			"tag":         "notify_me",
+			"probe_from":  utcNanos(v.ProbeFrom),
+			"probe_until": utcNanos(v.ProbeUntil),
+		}, nil
 	default:
 		return nil, fmt.Errorf("%w: %T", ErrPlanStrategyUnknown, r)
 	}

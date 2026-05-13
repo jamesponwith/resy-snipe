@@ -186,6 +186,8 @@ func releaseSummary(r domain.ReleaseStrategy) string {
 		return "discovered[" + v.ProbeFrom.Format(time.RFC3339) + "→" + v.ProbeUntil.Format(time.RFC3339) + "]"
 	case domain.ContinuousRelease:
 		return "continuous→" + v.Until.Format(time.RFC3339)
+	case domain.NotifyMeRelease:
+		return "notify_me[" + v.ProbeFrom.Format(time.RFC3339) + "→" + v.ProbeUntil.Format(time.RFC3339) + "]"
 	default:
 		return "<unknown>"
 	}

@@ -40,6 +40,7 @@ const (
 	releaseKindExplicit   = "explicit"
 	releaseKindDiscovered = "discovered"
 	releaseKindContinuous = "continuous"
+	releaseKindNotifyMe   = "notify_me"
 )
 
 // MarshalIntent encodes a domain.Intent for storage.
@@ -114,6 +115,12 @@ func encodeRelease(r domain.ReleaseStrategy) (*releaseJSON, error) {
 		}, nil
 	case domain.ContinuousRelease:
 		return &releaseJSON{Kind: releaseKindContinuous, Until: v.Until}, nil
+	case domain.NotifyMeRelease:
+		return &releaseJSON{
+			Kind:       releaseKindNotifyMe,
+			ProbeFrom:  v.ProbeFrom,
+			ProbeUntil: v.ProbeUntil,
+		}, nil
 	default:
 		return nil, fmt.Errorf("encodeRelease: unknown variant %T", r)
 	}
@@ -131,6 +138,8 @@ func decodeRelease(j *releaseJSON) (domain.ReleaseStrategy, error) {
 		return domain.DiscoveredRelease{ProbeFrom: j.ProbeFrom, ProbeUntil: j.ProbeUntil}, nil
 	case releaseKindContinuous:
 		return domain.ContinuousRelease{Until: j.Until}, nil
+	case releaseKindNotifyMe:
+		return domain.NotifyMeRelease{ProbeFrom: j.ProbeFrom, ProbeUntil: j.ProbeUntil}, nil
 	default:
 		return nil, fmt.Errorf("decodeRelease: unknown kind %q", j.Kind)
 	}

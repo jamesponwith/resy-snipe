@@ -37,6 +37,11 @@ func (e *Engine) runStrategy(ctx context.Context, state *SnipeState) error {
 			return errors.New("engine: ContinuousRelease requires a Provider — pass engine.WithProvider")
 		}
 		return e.runContinuousRelease(ctx, state, r)
+	case domain.NotifyMeRelease:
+		if e.provider == nil {
+			return errors.New("engine: NotifyMeRelease requires a Provider — pass engine.WithProvider")
+		}
+		return e.runNotifyMeRelease(ctx, state, r)
 	case nil:
 		return errors.New("engine: nil ReleaseStrategy")
 	default:
@@ -183,6 +188,95 @@ func (e *Engine) advanceToDiscovering(ctx context.Context, state *SnipeState, r 
 	}
 	return state.Transition(ctx, domain.StatusDiscovering, domain.EventDiscovered,
 		slog.String(domain.LogKeyVenueRef, state.Intent().Venue.String()),
+		slog.Time("probe_from", r.ProbeFrom),
+		slog.Time("probe_until", r.ProbeUntil),
+	)
+}
+
+// runNotifyMeRelease moves the snipe into Discovering and polls
+// Provider.PollAlerts between ProbeFrom and ProbeUntil. The first
+// AlertState reporting Fired==true transitions the snipe to Awaiting;
+// the booking race then takes over from there.
+//
+// Trade-off vs ContinuousRelease: the account-side alert endpoint is
+// far less anti-bot-sensitive than Find, so the polling floor of
+// 100ms is comfortable here. The cost is that the caller must have
+// an active NotifyMe enrollment for the (venue, date) pair — when the
+// adapter surfaces ErrAlertEnrollmentRequired, the engine fails the
+// snipe rather than spinning (no transient recovery path exists; the
+// enrollment is created out-of-band).
+func (e *Engine) runNotifyMeRelease(ctx context.Context, state *SnipeState, r domain.NotifyMeRelease) error {
+	if r.ProbeFrom.IsZero() || r.ProbeUntil.IsZero() {
+		return errors.New("engine: NotifyMeRelease requires ProbeFrom and ProbeUntil")
+	}
+	if !r.ProbeUntil.After(r.ProbeFrom) {
+		return errors.New("engine: NotifyMeRelease ProbeUntil must be after ProbeFrom")
+	}
+
+	if err := e.advanceToNotifyDiscovering(ctx, state, r); err != nil {
+		return err
+	}
+
+	if delay := r.ProbeFrom.Sub(e.clock.Now()); delay > 0 {
+		if err := waitWithCtx(ctx, e.clock, delay); err != nil {
+			return err
+		}
+	}
+
+	intent := state.Intent()
+	req := providers.AlertRequest{
+		Venue:     intent.Venue,
+		Date:      intent.Date,
+		PartySize: intent.PartySize,
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !e.clock.Now().Before(r.ProbeUntil) {
+			return state.Transition(ctx, domain.StatusFailed, domain.EventFailed,
+				slog.String("reason", "notify_me_window_expired"),
+				slog.Time("probe_until", r.ProbeUntil),
+			)
+		}
+
+		alert, err := e.provider.PollAlerts(ctx, req)
+		if err != nil {
+			if errors.Is(err, providers.ErrAlertEnrollmentRequired) {
+				// Terminal: no enrollment, no progress. Surface a Failed
+				// event with the enrollment reason so the operator/CLI
+				// can prompt for the out-of-band step.
+				return state.Transition(ctx, domain.StatusFailed, domain.EventFailed,
+					slog.String("reason", "notify_me_enrollment_required"),
+					slog.String(domain.LogKeyVenueRef, intent.Venue.String()),
+				)
+			}
+			return fmt.Errorf("engine: notify_me PollAlerts: %w", err)
+		}
+		if alert.Fired {
+			return state.Transition(ctx, domain.StatusAwaiting, domain.EventReleased,
+				slog.String(domain.LogKeyVenueRef, intent.Venue.String()),
+				slog.String("via", "notify_me"),
+				slog.Time("observed_at", e.clock.Now()),
+			)
+		}
+		if err := waitWithCtx(ctx, e.clock, e.pollInterval()); err != nil {
+			return err
+		}
+	}
+}
+
+// advanceToNotifyDiscovering moves a Scheduled snipe into Discovering
+// with a NotifyMe-tagged event. Idempotent: if the snipe is already
+// Discovering it is a no-op.
+func (e *Engine) advanceToNotifyDiscovering(ctx context.Context, state *SnipeState, r domain.NotifyMeRelease) error {
+	if state.Status() == domain.StatusDiscovering {
+		return nil
+	}
+	return state.Transition(ctx, domain.StatusDiscovering, domain.EventDiscovered,
+		slog.String(domain.LogKeyVenueRef, state.Intent().Venue.String()),
+		slog.String("via", "notify_me"),
 		slog.Time("probe_from", r.ProbeFrom),
 		slog.Time("probe_until", r.ProbeUntil),
 	)
