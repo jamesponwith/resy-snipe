@@ -93,24 +93,48 @@ receiver). Resy first sees us in the booking race, after the alert.
 - `runNotifyMeRelease` honors `PollInterval`, clamps to the source's
   `MinPollInterval`, classifies `ErrEnrollmentRequired` as terminal.
 
-**Email Source: scaffolded but stubbed.**
-[`internal/alerts/email/email.go`](../internal/alerts/email/email.go)
-defines the `Config` shape (IMAPAddr, Username, Password, Mailbox,
-SenderFilter), constructor, and `Source` type. `Poll` returns
-`ErrSourceNotImplemented`.
+**Email Source: parser + matching complete; IMAP loop stubbed.**
 
-**To finish the email Source:**
+| Component | Status | Code |
+|---|---|---|
+| Email parser | **Complete**, golden-tested against a real Resy alert | [`parse.go`](../internal/alerts/email/parse.go), [`testdata/coqodaq.eml`](../internal/alerts/email/testdata/coqodaq.eml) |
+| Source matching (cache + venue-name registry) | **Complete** | [`email.go`](../internal/alerts/email/email.go) |
+| `Source.IngestEmail` (testable seam) | **Complete** | [`email.go`](../internal/alerts/email/email.go) |
+| IMAP connect / IDLE / FETCH loop | Stubbed | future commit |
+
+The parser extracts `(VenueName, Date, PartySize, Sender, FiredAt)`
+from the load-bearing summary sentence Resy emits:
+
+```
+A table for 2 at COQODAQ on January 29 may now be available.
+```
+
+Sender check (`reservations@resy.com`) and subject marker
+(`Table may be available`) gate non-alert mail out with
+`ErrNotAResyAlert`. A real Resy alert whose body sentence is missing
+errors with `ErrUnparseable` so a Resy-side template change pages
+someone instead of silently breaking.
+
+Year inference uses an always-future heuristic: parsed month/day
+combined with the email `Date` header; if the candidate date is in
+the past relative to the email arrival, the alert is for next year.
+
+The Source caches parsed alerts keyed by `(lowercase name, date,
+party)` and serves them via `Poll`. Because the engine's `Request`
+carries a `VenueRef` but the email carries a display name, the daemon
+must call `Source.RegisterVenueName(name, venue)` when each NotifyMe
+quest is submitted — without that mapping, `Poll` returns
+`ErrEnrollmentRequired` (which the engine treats as terminal).
+
+**To finish the IMAP path:**
 
 1. Open a long-lived IMAP connection per Config — `go-imap` or
    similar. Use IDLE for near-push delivery; fall back to polling on
    servers without it.
-2. On each new message matching `SenderFilter`, parse subject + body
-   into `(venue, date, party_size)`. The parser belongs in
-   `internal/alerts/email/parse.go` alongside a golden-test fixture
-   from a real Resy NotifyMe email.
-3. Cache fires in a map keyed by `(User, VenueRef, Date, PartySize)`
-   so `Poll` is an O(1) lookup.
-4. Wire the daemon's secret-loader so `Password` comes from
+2. On each new message, call `Source.IngestEmail(raw)`. The parser
+   filters non-Resy mail via `ErrNotAResyAlert`; just ignore that
+   error and move on.
+3. Wire the daemon's secret-loader so `Password` comes from
    `internal/secrets` rather than CLI flags.
 
 ## Sentinels

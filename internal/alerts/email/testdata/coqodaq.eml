@@ -1,0 +1,39 @@
+Content-Type: text/html; charset=us-ascii
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: =?UTF-8?B?Q09RT0RBUfCflJQ=?= Table may be available
+From: Reservations Desk <reservations@resy.com>
+Message-Id: <fixture-coqodaq@example.org>
+Date: Wed, 28 Jan 2026 15:50:43 +0000 (UTC)
+To: user@example.org
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Email Template</title></head>
+<body>
+  <table>
+    <tr><td><strong class="h1">Hot table alert.</strong></td></tr>
+  </table>
+  <table>
+    <tr><td class="text2"><strong>COQODAQ</strong></td></tr>
+    <tr><td class="text2">Thu, Jan. 29 at 5:00pm</td></tr>
+    <tr><td class="text2">2 Guests</td></tr>
+    <tr><td class="text2">Global Dining Access</td></tr>
+  </table>
+  <table>
+    <tr>
+      <td class="text">
+        A table for 2 at COQODAQ on January 29 may now be available.
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <a href="https://example.com/click/redacted">Check Availability &amp; Book</a>
+      </td>
+    </tr>
+    <tr>
+      <td>Please note, this is not a reservation confirmation.<br /><br />Thanks for using Resy Notify.</td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -1,42 +1,41 @@
 // Package email is the IMAP-driven alerts.Source: it watches a mailbox
 // for Resy NotifyMe emails and matches them against active quests.
 //
-// IMPLEMENTATION STATUS: scaffolded. The constructor, Source-interface
-// methods, and configuration shape are stable. The IMAP connection
-// loop and the email parser are stubbed — Poll currently returns
-// alerts.ErrSourceNotImplemented so anything wired against it fails
-// loudly.
+// IMPLEMENTATION STATUS:
 //
-// To complete:
+//   - Parser (parse.go): COMPLETE. Extracts (venue name, date, party
+//     size, sender, fired_at) from a real Resy NotifyMe email with a
+//     golden-test fixture.
+//   - Source matching: COMPLETE. IngestEmail caches parsed alerts and
+//     Poll serves them via a name registry (RegisterVenueName) so the
+//     engine's VenueRef-keyed Request maps to the email's display
+//     name.
+//   - IMAP loop: STUBBED. Connect/IDLE/poll-FETCH is not wired —
+//     IngestEmail is currently the only way alerts land in the cache.
+//     A future commit adds an IMAP client that calls IngestEmail on
+//     each new matching message.
 //
-//  1. Open a long-lived IMAP connection per Config (use go-imap or
-//     similar; IDLE for near-push delivery, fallback to short polling
-//     on servers without IDLE).
-//  2. On each new message matching SenderFilter, parse subject + body
-//     into (venue, date, party_size). Resy's email shape is the open
-//     question — see docs/notify-me.md. The parser belongs in
-//     parse.go alongside a golden-test fixture.
-//  3. Cache fires in a map keyed by (User, VenueRef, Date, PartySize)
-//     so Poll is an O(1) lookup. Use sync.Mutex; this code path is
-//     hit by every engine NotifyMeRelease loop iteration.
-//  4. Optionally: act on the "your reservation slot was taken" follow-
-//     up email Resy sends after a hit, to evict stale cache entries.
+// Until the IMAP loop lands, the daemon can drive the Source via
+// IngestEmail directly (e.g., from a webhook that forwards email
+// bodies, or from a sidecar that does the IMAP work).
 package email
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"resy-snipe/internal/alerts"
+	"resy-snipe/internal/domain"
 )
 
 // Config carries the IMAP credentials and the matching rules a Source
 // needs to filter messages. Password is intended to be loaded via
 // internal/secrets so the daemon doesn't pass it through the CLI.
 type Config struct {
-	// IMAPAddr is host:port (e.g., "imap.gmail.com:993").
+	// IMAPAddr is host:port (e.g., "imap.gmail.com:993"). Required.
 	IMAPAddr string
 	// Username + Password authenticate the IMAP session. For Gmail,
 	// Password must be an app password (regular passwords don't work
@@ -45,26 +44,28 @@ type Config struct {
 	Password string
 	// Mailbox to watch; defaults to "INBOX" when empty.
 	Mailbox string
-	// SenderFilter restricts which messages are parsed. Defaults to
-	// "notify@resy.com" / "alerts@resy.com" — exact value awaits a
-	// sample email capture.
-	SenderFilter string
-	// MinPollInterval is the politeness floor. For Gmail with IDLE,
-	// 1s is reasonable; for plain polling, 5s. Defaults to 5s.
+	// MinPollInterval is the politeness floor. Defaults to 5s.
 	MinPollInterval time.Duration
 }
 
-// Source is the IMAP-backed alerts.Source.
+// Source is the IMAP-backed alerts.Source. Safe for concurrent use.
 type Source struct {
 	cfg Config
 
-	mu sync.Mutex
-	// Future: connection handle + cached fires keyed by (user, venue,
-	// date, party). The current stub has no state.
+	mu       sync.Mutex
+	fires    map[fireKey]Alert            // parsed alerts keyed by (lowercase name, date, party)
+	venueMap map[string]domain.VenueRef   // lowercase display name -> resolved VenueRef
 }
 
-// New constructs a Source. It does NOT open a connection — call Start
-// (once the impl lands) or rely on lazy connect on first Poll.
+type fireKey struct {
+	name  string // lowercase
+	date  domain.Date
+	party int
+}
+
+// New constructs a Source. It does NOT open an IMAP connection; the
+// IMAP loop is stubbed (see package doc) and the Source is fed via
+// IngestEmail.
 func New(cfg Config) (*Source, error) {
 	if cfg.IMAPAddr == "" {
 		return nil, fmt.Errorf("email: IMAPAddr required")
@@ -78,18 +79,67 @@ func New(cfg Config) (*Source, error) {
 	if cfg.MinPollInterval <= 0 {
 		cfg.MinPollInterval = 5 * time.Second
 	}
-	return &Source{cfg: cfg}, nil
+	return &Source{
+		cfg:      cfg,
+		fires:    make(map[fireKey]Alert),
+		venueMap: make(map[string]domain.VenueRef),
+	}, nil
 }
 
-// Poll implements alerts.Source. Stubbed until the IMAP layer and
-// parser land.
-func (s *Source) Poll(_ context.Context, _ alerts.Request) (alerts.State, error) {
+// RegisterVenueName teaches the Source that a venue's Resy display
+// name maps to a domain.VenueRef. Callers (the daemon, the CLI snipe
+// path) call this when a NotifyMe quest is submitted so Poll can
+// translate the engine's VenueRef-keyed Request back to the email's
+// display-name payload.
+//
+// Name matching is case-insensitive and whitespace-trimmed; Resy's
+// rendering preserves case but the surrounding HTML can introduce
+// stray whitespace.
+func (s *Source) RegisterVenueName(name string, venue domain.VenueRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return alerts.State{}, fmt.Errorf(
-		"email.Source.Poll: IMAP loop not implemented; see internal/alerts/email/email.go: %w",
-		alerts.ErrSourceNotImplemented,
-	)
+	s.venueMap[normalizeName(name)] = venue
+}
+
+// IngestEmail parses raw and caches the resulting Alert keyed by
+// (lowercase venue name, date, party). Subsequent Poll calls for a
+// matching Request return Fired:true.
+//
+// Returns ErrNotAResyAlert for non-Resy mail (caller should ignore);
+// other errors indicate a parser/format problem worth surfacing.
+func (s *Source) IngestEmail(raw []byte) error {
+	a, err := Parse(raw)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fires[fireKey{
+		name:  normalizeName(a.VenueName),
+		date:  a.Date,
+		party: a.PartySize,
+	}] = a
+	return nil
+}
+
+// Poll implements alerts.Source. It looks up the cached fire matching
+// req via the venue-name registry; if the registry has no mapping for
+// req.Venue, it surfaces ErrEnrollmentRequired (the daemon hasn't told
+// the Source what display name to look for, which is the same as
+// "no enrollment" from the engine's POV).
+func (s *Source) Poll(_ context.Context, req alerts.Request) (alerts.State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	name, ok := s.lookupNameLocked(req.Venue)
+	if !ok {
+		return alerts.State{}, fmt.Errorf("venue=%s: %w", req.Venue, alerts.ErrEnrollmentRequired)
+	}
+	a, ok := s.fires[fireKey{name: name, date: req.Date, party: req.PartySize}]
+	if !ok {
+		return alerts.State{}, nil
+	}
+	return alerts.State{Fired: true, FiredAt: a.FiredAt}, nil
 }
 
 // MinPollInterval implements alerts.Source.
@@ -98,3 +148,16 @@ func (s *Source) MinPollInterval() time.Duration { return s.cfg.MinPollInterval 
 // Close implements alerts.Source. Currently a no-op; once the IMAP
 // connection lands, this tears it down.
 func (s *Source) Close() error { return nil }
+
+// lookupNameLocked returns the registered display name for venue, if
+// any. Caller must hold s.mu.
+func (s *Source) lookupNameLocked(venue domain.VenueRef) (string, bool) {
+	for name, ref := range s.venueMap {
+		if ref == venue {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func normalizeName(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
