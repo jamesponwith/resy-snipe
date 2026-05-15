@@ -403,19 +403,34 @@ func TestNotifyMeReleaseFiresOnAlert(t *testing.T) {
 	probeFrom := fake.Now().Add(time.Second)
 	probeUntil := fake.Now().Add(time.Hour)
 
-	if _, err := eng.Submit(context.Background(), "snp_nm_hit",
-		notifyMeIntent(probeFrom, probeUntil)); err != nil {
+	// Use a long PollInterval so the test can land mem.Fire between the
+	// engine's first and second polls without racing. With the default
+	// 100ms cadence, advanceToCallCount can accidentally cross the
+	// engine's wait deadline (it advances 100ms per iteration), causing
+	// the engine to do an unobserved second poll before Fire runs.
+	intent := notifyMeIntent(probeFrom, probeUntil)
+	r := intent.Release.(domain.NotifyMeRelease)
+	r.PollInterval = 10 * time.Minute
+	intent.Release = r
+
+	if _, err := eng.Submit(context.Background(), "snp_nm_hit", intent); err != nil {
 		t.Fatal(err)
 	}
 
 	fut := driveRunInBackground(t, eng, "snp_nm_hit")
 
-	// First poll: unfired. Then fire the alert and let one more poll
-	// land to observe it.
+	// First poll fires shortly after the clock crosses ProbeFrom (1s).
 	advanceToCallCount(t, fake, &src.calls, 1)
+	// Sync on the engine's After(PollInterval) registration so the
+	// next fake.Advance computes against that deadline, not against a
+	// future post-Advance clock.
+	waitForPending(t, fake, 1)
+	// Engine is now waiting at NOW + 10min; record the alert.
 	mem.Fire("u1", domain.VenueRef{Provider: "resy", Ref: "38660"},
 		domain.NewDate(2026, time.June, 1), 2, fake.Now())
-	advanceToCallCount(t, fake, &src.calls, 2)
+	// Single advance past the wait fires the timer; engine polls,
+	// sees Fired:true, transitions, returns.
+	fake.Advance(11 * time.Minute)
 
 	if err := fut.Wait(t, 2*time.Second); err != nil {
 		t.Fatalf("Run err: %v", err)
@@ -489,51 +504,59 @@ func TestNotifyMeReleaseFailsOnEnrollmentRequired(t *testing.T) {
 	}
 }
 
-// TestNotifyMeReleaseHonorsPerQuestInterval verifies that PollInterval
-// on the strategy is the gap the engine waits between Polls — and
-// that the MinPollInterval clamp from the source raises a too-small
-// value to the floor.
+// TestNotifyMeReleaseHonorsPerQuestInterval verifies that the engine
+// clamps a per-quest PollInterval up to the source's MinPollInterval.
+//
+// The margins are deliberately wide (1h floor vs. 30-minute under-floor
+// advance) so that goroutine scheduling jitter under -race can't
+// accidentally cross the boundary — the test verifies a clamp, not a
+// precise tick. The engine is cleaned up via ctx cancel rather than by
+// trying to drive it through a full hit cycle (which is covered by
+// TestNotifyMeReleaseFiresOnAlert).
 func TestNotifyMeReleaseHonorsPerQuestInterval(t *testing.T) {
 	t.Parallel()
-	// Source floor is 200ms; quest asks for 50ms. Engine must clamp
-	// to 200ms.
-	mem := alerts.NewMemorySource(200 * time.Millisecond)
+	const floor = time.Hour
+	mem := alerts.NewMemorySource(floor)
 	src := &countingAlertSource{inner: mem}
 
 	eng, fake, _ := newReleaseFixtureWithSource(t, nil, src)
-	probeFrom := fake.Now()
-	probeUntil := fake.Now().Add(time.Hour)
 
-	intent := notifyMeIntent(probeFrom, probeUntil)
+	intent := notifyMeIntent(fake.Now(), fake.Now().Add(4*time.Hour))
 	r := intent.Release.(domain.NotifyMeRelease)
-	r.PollInterval = 50 * time.Millisecond // below floor
+	r.PollInterval = 50 * time.Millisecond // far below floor
 	intent.Release = r
 
 	if _, err := eng.Submit(context.Background(), "snp_nm_int", intent); err != nil {
 		t.Fatal(err)
 	}
-	fut := driveRunInBackground(t, eng, "snp_nm_int")
-	t.Cleanup(func() { _ = fut })
 
-	// First poll happens immediately. Advance 100ms — should NOT
-	// trigger a second poll (floor is 200ms). Advance another 100ms
-	// — should trigger.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- eng.Run(ctx, "snp_nm_int") }()
+
+	// Wait for first poll AND the engine's After(interval) registration
+	// — without this sync the test thread can race past the engine and
+	// compute the wait deadline against a stale clock.
 	advanceToCallCount(t, fake, &src.calls, 1)
-	fake.Advance(100 * time.Millisecond)
-	runtime.Gosched()
-	if got := src.calls.Load(); got != 1 {
-		t.Errorf("under-floor advance triggered a poll: calls=%d", got)
-	}
-	fake.Advance(150 * time.Millisecond)
-	advanceToCallCount(t, fake, &src.calls, 2)
+	waitForPending(t, fake, 1)
 
-	// Fire the alert so the goroutine doesn't leak; window expiry
-	// would also work but is slower.
-	mem.Fire("u1", domain.VenueRef{Provider: "resy", Ref: "38660"},
-		domain.NewDate(2026, time.June, 1), 2, fake.Now())
-	advanceToCallCount(t, fake, &src.calls, 3)
-	if err := fut.Wait(t, 2*time.Second); err != nil {
-		t.Fatalf("Run err: %v", err)
+	// Advance 30 minutes — far under the 1h clamp. The engine must
+	// NOT poll again.
+	fake.Advance(30 * time.Minute)
+	for range 5 {
+		runtime.Gosched()
+	}
+	if got := src.calls.Load(); got != 1 {
+		t.Errorf("under-floor advance triggered a poll: calls=%d, want 1 (clamp broken)", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("engine did not exit on ctx cancel")
 	}
 }
 
@@ -549,6 +572,22 @@ func advanceToCallCount(t *testing.T, fake *clock.Fake, counter *atomic.Int32, w
 			t.Fatalf("counter stuck at %d, wanted %d", counter.Load(), want)
 		}
 		fake.Advance(100 * time.Millisecond)
+		runtime.Gosched()
+	}
+}
+
+// waitForPending blocks until the fake clock has at least `want`
+// scheduled timers (or the real-time deadline expires). Tests use this
+// to sync on a goroutine having registered its next After call,
+// avoiding races where the test advances the clock before the
+// goroutine has set its next wakeup.
+func waitForPending(t *testing.T, fake *clock.Fake, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for fake.PendingCount() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("pending=%d, wanted %d", fake.PendingCount(), want)
+		}
 		runtime.Gosched()
 	}
 }

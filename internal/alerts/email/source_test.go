@@ -149,6 +149,44 @@ Top stories this week.
 	}
 }
 
+// TestStartFailsOnUnreachableHost asserts that bad connection setup
+// surfaces synchronously from Start (daemon boot fails loudly) rather
+// than silently spinning in a reconnect loop.
+func TestStartFailsOnUnreachableHost(t *testing.T) {
+	t.Parallel()
+	// 127.0.0.1:1 is a reserved port that nothing listens on — DialTLS
+	// fails fast.
+	src, err := email.New(email.Config{
+		IMAPAddr:        "127.0.0.1:1",
+		Username:        "u",
+		Password:        "p",
+		MinPollInterval: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := src.Start(ctx, nil); err == nil {
+		t.Fatal("expected Start to fail against unreachable host")
+	}
+}
+
+func TestCloseBeforeStartIsSafe(t *testing.T) {
+	t.Parallel()
+	src := newTestSource(t)
+	// Close is invoked by t.Cleanup; this test asserts the explicit
+	// pre-Start path doesn't panic or deadlock.
+	if err := src.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := src.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
 func TestNewRejectsMissingConfig(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

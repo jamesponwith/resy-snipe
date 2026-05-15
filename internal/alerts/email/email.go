@@ -23,9 +23,13 @@ package email
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapclient"
 
 	"resy-snipe/internal/alerts"
 	"resy-snipe/internal/domain"
@@ -53,8 +57,18 @@ type Source struct {
 	cfg Config
 
 	mu       sync.Mutex
-	fires    map[fireKey]Alert            // parsed alerts keyed by (lowercase name, date, party)
-	venueMap map[string]domain.VenueRef   // lowercase display name -> resolved VenueRef
+	fires    map[fireKey]Alert          // parsed alerts keyed by (lowercase name, date, party)
+	venueMap map[string]domain.VenueRef // lowercase display name -> resolved VenueRef
+
+	// IMAP lifecycle state. Populated by Start; torn down by Close.
+	// Tests that exercise only the Ingest + Poll surfaces leave these
+	// nil — the runLoop goroutine is opt-in.
+	started bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	log     *slog.Logger
+	client  *imapclient.Client
+	lastUID imap.UID
 }
 
 type fireKey struct {
@@ -145,9 +159,30 @@ func (s *Source) Poll(_ context.Context, req alerts.Request) (alerts.State, erro
 // MinPollInterval implements alerts.Source.
 func (s *Source) MinPollInterval() time.Duration { return s.cfg.MinPollInterval }
 
-// Close implements alerts.Source. Currently a no-op; once the IMAP
-// connection lands, this tears it down.
-func (s *Source) Close() error { return nil }
+// Close implements alerts.Source. If Start was called, this cancels
+// the runLoop goroutine, waits for it to exit, and tears down the
+// IMAP connection. Safe to call multiple times and safe to call
+// before Start.
+func (s *Source) Close() error {
+	s.mu.Lock()
+	cancel := s.cancel
+	s.cancel = nil
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	s.wg.Wait()
+
+	s.mu.Lock()
+	client := s.client
+	s.client = nil
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Logout().Wait()
+		_ = client.Close()
+	}
+	return nil
+}
 
 // lookupNameLocked returns the registered display name for venue, if
 // any. Caller must hold s.mu.

@@ -93,14 +93,16 @@ receiver). Resy first sees us in the booking race, after the alert.
 - `runNotifyMeRelease` honors `PollInterval`, clamps to the source's
   `MinPollInterval`, classifies `ErrEnrollmentRequired` as terminal.
 
-**Email Source: parser + matching complete; IMAP loop stubbed.**
+**Email Source: end-to-end.** IMAP polling loop, parser, and Source
+matching are all wired and live behind `Source.Start(ctx, log)`.
 
 | Component | Status | Code |
 |---|---|---|
 | Email parser | **Complete**, golden-tested against a real Resy alert | [`parse.go`](../internal/alerts/email/parse.go), [`testdata/coqodaq.eml`](../internal/alerts/email/testdata/coqodaq.eml) |
 | Source matching (cache + venue-name registry) | **Complete** | [`email.go`](../internal/alerts/email/email.go) |
 | `Source.IngestEmail` (testable seam) | **Complete** | [`email.go`](../internal/alerts/email/email.go) |
-| IMAP connect / IDLE / FETCH loop | Stubbed | future commit |
+| IMAP connect / Login / Select / UIDSearch / Fetch loop | **Complete** (polling) | [`imap.go`](../internal/alerts/email/imap.go) |
+| IMAP IDLE (near-push delivery) | Future optimization | — |
 
 The parser extracts `(VenueName, Date, PartySize, Sender, FiredAt)`
 from the load-bearing summary sentence Resy emits:
@@ -126,16 +128,32 @@ must call `Source.RegisterVenueName(name, venue)` when each NotifyMe
 quest is submitted — without that mapping, `Poll` returns
 `ErrEnrollmentRequired` (which the engine treats as terminal).
 
-**To finish the IMAP path:**
+**IMAP behavior:**
 
-1. Open a long-lived IMAP connection per Config — `go-imap` or
-   similar. Use IDLE for near-push delivery; fall back to polling on
-   servers without it.
-2. On each new message, call `Source.IngestEmail(raw)`. The parser
-   filters non-Resy mail via `ErrNotAResyAlert`; just ignore that
-   error and move on.
-3. Wire the daemon's secret-loader so `Password` comes from
-   `internal/secrets` rather than CLI flags.
+- `Source.Start(ctx, log)` dials TLS, logs in with `Username` /
+  `Password`, and SELECTs `Mailbox`. Bad creds or unreachable host
+  fail synchronously so daemon boot is loud.
+- The runLoop polls every `MinPollInterval` (default 5s) via UIDSearch
+  filtered by `From: reservations@resy.com`, then FETCHes any new UIDs
+  and calls `IngestEmail` on each body (Peek so messages stay Unseen).
+- UID tracking is in-memory; only messages with UID > the mailbox's
+  UIDNext-at-Start are processed, so pre-existing alerts in the
+  inbox are ignored. A daemon restart resets this high-water mark;
+  cached fires from this process are lost but already-handled snipes
+  have moved past Awaiting.
+- On any transport error, the loop disconnects + reconnects on the
+  next tick. Latency: up to `MinPollInterval` + the engine's
+  per-quest `PollInterval` from email arrival to engine notification.
+
+**Daemon wiring still needed:**
+
+1. Load IMAP `Password` via `internal/secrets` (rather than a CLI
+   flag) when constructing `email.Config`.
+2. Construct `email.New(cfg)`, call `Source.Start(ctx, log)`, pass to
+   `engine.WithAlertSource`.
+3. On each NotifyMe quest submission, call
+   `Source.RegisterVenueName(displayName, venueRef)` so Poll can
+   match incoming emails to the engine's VenueRef-keyed Request.
 
 ## Sentinels
 

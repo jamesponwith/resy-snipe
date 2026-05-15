@@ -35,6 +35,23 @@ func (f *Fake) Now() time.Time {
 	return f.now
 }
 
+// PendingCount returns the number of scheduled, not-yet-fired timers.
+// Tests use this to sync on a goroutine's After/AfterFunc registration
+// before advancing the clock — without it, the test thread can race
+// past the goroutine's registration and schedule the timer against a
+// stale (further-advanced) clock.
+func (f *Fake) PendingCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, e := range f.pending {
+		if !e.stopped {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *Fake) After(d time.Duration) <-chan time.Time {
 	ch := make(chan time.Time, 1)
 	f.schedule(d, func(now time.Time) { ch <- now })
