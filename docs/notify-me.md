@@ -54,7 +54,25 @@ Failed (reason=notify_me_enrollment_required)
 `Discovering` carries `via=notify_me` on its event attrs to
 distinguish it from a `DiscoveredRelease` discovering event.
 
-## CLI
+## Two ways to run it
+
+### `resy-snipe watch` — multi-venue mini-daemon (recommended)
+
+One process, multiple watches, shared IMAP connection. Config in
+[`docs/examples/watch.toml`](examples/watch.toml). Survives shell exit
+with `nohup`:
+
+```bash
+export RESY_SNIPE_IMAP_PASS='your-gmail-app-password'
+nohup resy-snipe watch -config docs/examples/watch.toml \
+    > watch.log 2>&1 &
+echo "watch PID: $!"
+```
+
+Each `[[watches]]` entry is one NotifyMeRelease snipe. Watch the log
+with `tail -f watch.log`. Stop with `kill <PID>`.
+
+### `resy-snipe` (single-venue CLI) — older shape, one snipe per process
 
 ```
 export RESY_SNIPE_IMAP_PASS='your-gmail-app-password'
@@ -65,8 +83,8 @@ resy-snipe \
   -release-strategy notify-me \
   -retry-window 24h -poll-interval 5s \
   -imap-addr imap.gmail.com:993 \
-  -imap-user you@gmail.com \
-  -user you@gmail.com
+  -imap-user jponwith@sandiego.edu \
+  -user jponwith@sandiego.edu
 ```
 
 Flag breakdown:

@@ -51,6 +51,9 @@ func run(args []string, stdin io.Reader, logOut io.Writer, clk clock.Clock) erro
 	if len(args) > 1 && args[0] == "venue" && args[1] == "resolve" {
 		return runResolveCmd(context.Background(), args[2:], stdin, logOut, clk)
 	}
+	if len(args) > 0 && args[0] == "watch" {
+		return runWatchCmd(context.Background(), args[1:], stdin, logOut, clk)
+	}
 	if len(args) > 1 && args[0] == "quest" {
 		switch args[1] {
 		case "plan":

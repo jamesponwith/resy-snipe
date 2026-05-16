@@ -1,0 +1,49 @@
+# resy-snipe watch -config <this file>
+#
+# Long-running process that watches a Gmail inbox for Resy NotifyMe
+# alert emails and books matching reservations. One process supervises
+# every entry below; they share one IMAP connection.
+#
+# Run it with:
+#
+#     export RESY_SNIPE_IMAP_PASS='<your Gmail app password>'
+#     resy-snipe watch -config docs/examples/watch.toml
+#
+# To survive shell exit (recommended for multi-day windows):
+#
+#     nohup resy-snipe watch -config docs/examples/watch.toml \
+#         > watch.log 2>&1 &
+#     echo "watch PID: $!"
+#
+# Prerequisite: each `user` below must have a stored Resy session.
+# Run `resy-snipe login -user <email>` once before starting watch mode.
+
+imap_addr     = "imap.gmail.com:993"
+imap_user     = "jponwith@sandiego.edu"
+imap_pass_env = "RESY_SNIPE_IMAP_PASS"
+mailbox       = "INBOX"
+# min_poll_interval = "5s"      # default; lower means more inbox round-trips
+
+# Each [[watches]] entry is one NotifyMeRelease snipe. The display name
+# must match what Resy puts in the alert email body for that venue —
+# the parser uses it (case-insensitive) to route the alert to this
+# entry. If you're unsure of the exact wording, run a 30s probe with
+# -release-strategy=notify-me and watch the parser logs.
+
+[[watches]]
+venue_id     = 834
+venue_name   = "4 Charles Prime Rib"
+date         = "2026-05-22"
+party_size   = 2
+res_times    = ["17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00"]
+retry_window = "168h"            # six days — covers the window through dinner
+user         = "jponwith@sandiego.edu"
+
+[[watches]]
+venue_id     = 64593
+venue_name   = "Torrisi"
+date         = "2026-05-22"
+party_size   = 2
+res_times    = ["17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00"]
+retry_window = "168h"
+user         = "jponwith@sandiego.edu"
