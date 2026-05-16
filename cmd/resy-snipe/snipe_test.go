@@ -203,7 +203,7 @@ func TestRunSnipe_EndToEnd_Booked(t *testing.T) {
 	intent := snipeIntent(clk.Now().Add(-time.Second))
 
 	logger := slog.New(slog.DiscardHandler)
-	finalStatus, err := runSnipe(context.Background(), intent, &snipeFakeSession{}, s, prov, notifier, logger, clk)
+	finalStatus, err := runSnipe(context.Background(), intent, &snipeFakeSession{}, s, prov, nil, notifier, logger, clk)
 	if err != nil {
 		t.Fatalf("runSnipe: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestRunSnipe_EndToEnd_FailedBookingRace(t *testing.T) {
 
 	intent := snipeIntent(clk.Now().Add(-time.Second))
 	logger := slog.New(slog.DiscardHandler)
-	finalStatus, err := runSnipe(context.Background(), intent, &snipeFakeSession{}, s, prov, notifier, logger, clk)
+	finalStatus, err := runSnipe(context.Background(), intent, &snipeFakeSession{}, s, prov, nil, notifier, logger, clk)
 	if err == nil {
 		t.Fatal("expected non-nil error from failed booking race")
 	}

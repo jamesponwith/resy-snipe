@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"resy-snipe/internal/alerts"
 	"resy-snipe/internal/clock"
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/notify"
@@ -462,7 +463,7 @@ func TestRun_SnipeWithUserFlag_LoadsPersistedSession(t *testing.T) {
 	prev := runSnipeFn
 	t.Cleanup(func() { runSnipeFn = prev })
 	var called atomic.Int32
-	runSnipeFn = func(_ context.Context, _ domain.Intent, sess providers.Session, _ store.Store, _ providers.Provider, _ notify.Notifier, _ *slog.Logger, _ clock.Clock) (domain.Status, error) {
+	runSnipeFn = func(_ context.Context, _ domain.Intent, sess providers.Session, _ store.Store, _ providers.Provider, _ alerts.Source, _ notify.Notifier, _ *slog.Logger, _ clock.Clock) (domain.Status, error) {
 		called.Store(1)
 		if sess == nil {
 			t.Error("runSnipeFn: nil session — load failed silently")

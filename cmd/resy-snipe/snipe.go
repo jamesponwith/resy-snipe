@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"resy-snipe/internal/alerts"
 	"resy-snipe/internal/clock"
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/engine"
@@ -48,11 +49,16 @@ func runSnipe(
 	sess providers.Session,
 	s store.Store,
 	provider providers.Provider,
+	alertSource alerts.Source,
 	notifier notify.Notifier,
 	logger *slog.Logger,
 	clk clock.Clock,
 ) (domain.Status, error) {
-	eng := engine.New(s, clk, logger, engine.WithProvider(provider))
+	opts := []engine.Option{engine.WithProvider(provider)}
+	if alertSource != nil {
+		opts = append(opts, engine.WithAlertSource(alertSource))
+	}
+	eng := engine.New(s, clk, logger, opts...)
 
 	// Bridge engine events → notifier surface. The bridge is the only
 	// consumer of the engine's event stream in Phase 1; the Phase 2

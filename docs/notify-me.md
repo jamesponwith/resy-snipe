@@ -57,19 +57,42 @@ distinguish it from a `DiscoveredRelease` discovering event.
 ## CLI
 
 ```
+export RESY_SNIPE_IMAP_PASS='your-gmail-app-password'
+
 resy-snipe \
-  -venue-id 38660 -date 2026-06-01 -party-size 2 \
-  -res-times 19:00,19:30 \
+  -venue-id 38660 -venue-name 'COQODAQ' \
+  -date 2026-06-01 -party-size 2 -res-times 19:00,19:30 \
   -release-strategy notify-me \
-  -retry-window 4h \
-  -poll-interval 5s \
-  -user you@example.com
+  -retry-window 24h -poll-interval 5s \
+  -imap-addr imap.gmail.com:993 \
+  -imap-user you@gmail.com \
+  -user you@gmail.com
 ```
 
-`-retry-window` is the `ProbeUntil − ProbeFrom` span. `-poll-interval`
-is the per-quest cadence; zero falls back to engine `PollFloor`. The
-AlertSource's `MinPollInterval` is a **hard floor** — a quest can't
-poll faster than the origin allows (IMAP politeness, anti-bot).
+Flag breakdown:
+
+- `-venue-name` is the **display name** Resy puts in the alert email
+  body (e.g. "COQODAQ"). The email Source uses it to match incoming
+  alerts to your quest. Case-insensitive; whitespace-trimmed.
+- `-retry-window` is the `ProbeUntil − ProbeFrom` span — how long the
+  CLI sits waiting for an alert before giving up.
+- `-poll-interval` is the per-quest cadence at which the engine asks
+  the in-memory cache "any alert yet?". Zero falls back to engine
+  `PollFloor` (100ms). The AlertSource's `MinPollInterval` is a hard
+  floor.
+- `-imap-pass-env` (default `RESY_SNIPE_IMAP_PASS`) names the env var
+  holding the password. The password itself never appears in CLI
+  history or process listings.
+- Gmail-specific: enable IMAP in Settings, and generate an **app
+  password** at myaccount.google.com → Security → App passwords.
+  Plain account passwords don't work over IMAP.
+
+The CLI opens the IMAP session synchronously at boot; bad creds or
+unreachable host fail immediately rather than spinning. After Start,
+the daemon's IMAP loop polls every 5s by default (`-imap-min-poll`);
+the engine layer polls the in-memory cache every `-poll-interval`.
+Total worst-case latency from email arrival to engine notification:
+`imap-min-poll + poll-interval`.
 
 ## Anti-bot trade-off
 

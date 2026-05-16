@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"resy-snipe/internal/alerts"
+	"resy-snipe/internal/alerts/email"
 	"resy-snipe/internal/clock"
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/notify"
@@ -158,7 +160,17 @@ func run(args []string, stdin io.Reader, logOut io.Writer, clk clock.Clock) erro
 	defer func() { _ = notifier.Close() }()
 
 	provider := &providerAdapter{Client: rclient}
-	finalStatus, snipeErr := runSnipeFn(parent, intent, sess, sqlStore, provider, notifier, logger, clk)
+
+	// NotifyMeRelease requires an alerts.Source — for v1 the only
+	// implementation is internal/alerts/email (IMAP). Other strategies
+	// pass nil and skip this entirely.
+	alertSource, alertCleanup, err := setupNotifyMeAlertSource(parent, intent, opts, logger)
+	if err != nil {
+		return err
+	}
+	defer alertCleanup()
+
+	finalStatus, snipeErr := runSnipeFn(parent, intent, sess, sqlStore, provider, alertSource, notifier, logger, clk)
 	if snipeErr != nil {
 		return snipeErr
 	}
@@ -166,6 +178,62 @@ func run(args []string, stdin io.Reader, logOut io.Writer, clk clock.Clock) erro
 		return fmt.Errorf("snipe did not book (final status: %s)", finalStatus)
 	}
 	return nil
+}
+
+// setupNotifyMeAlertSource constructs an IMAP-backed email.Source when
+// the intent uses NotifyMeRelease. It validates the required CLI flags
+// (-venue-name, -imap-addr, -imap-user, plus the env var named by
+// -imap-pass-env), opens the IMAP session synchronously so bad creds
+// or unreachable hosts fail loudly at boot, and registers the venue's
+// display name so incoming alert emails match the engine's
+// VenueRef-keyed Request.
+//
+// Returns (nil, no-op, nil) for non-NotifyMe strategies; the caller
+// always defers the cleanup.
+func setupNotifyMeAlertSource(
+	ctx context.Context,
+	intent domain.Intent,
+	opts cliOptions,
+	logger *slog.Logger,
+) (alerts.Source, func(), error) {
+	noop := func() {}
+	if _, ok := intent.Release.(domain.NotifyMeRelease); !ok {
+		return nil, noop, nil
+	}
+
+	if strings.TrimSpace(opts.venueName) == "" {
+		return nil, noop, fmt.Errorf("-venue-name is required with -release-strategy=notify-me")
+	}
+	if strings.TrimSpace(opts.imapAddr) == "" || strings.TrimSpace(opts.imapUser) == "" {
+		return nil, noop, fmt.Errorf("-imap-addr and -imap-user are required with -release-strategy=notify-me")
+	}
+	pass := os.Getenv(opts.imapPassEnv)
+	if pass == "" {
+		return nil, noop, fmt.Errorf("IMAP password env var %q is empty (set it or pass -imap-pass-env)", opts.imapPassEnv)
+	}
+
+	cfg := email.Config{
+		IMAPAddr:        opts.imapAddr,
+		Username:        opts.imapUser,
+		Password:        pass,
+		Mailbox:         opts.imapMailbox,
+		MinPollInterval: opts.imapMinPoll,
+	}
+	src, err := email.New(cfg)
+	if err != nil {
+		return nil, noop, fmt.Errorf("email source: %w", err)
+	}
+	if err := src.Start(ctx, logger); err != nil {
+		return nil, noop, fmt.Errorf("email source start: %w", err)
+	}
+	src.RegisterVenueName(opts.venueName, intent.Venue)
+	logger.Info("notify-me alert source attached",
+		slog.String("imap_addr", opts.imapAddr),
+		slog.String("imap_user", opts.imapUser),
+		slog.String("venue_name", opts.venueName),
+		slog.String(domain.LogKeyVenueRef, intent.Venue.String()),
+	)
+	return src, func() { _ = src.Close() }, nil
 }
 
 // newCLINotifier returns the stdout notifier the CLI uses for live

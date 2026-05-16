@@ -44,6 +44,21 @@ type cliOptions struct {
 	retryWindow     time.Duration
 	pollInterval    time.Duration
 	logLevel        string
+
+	// venueName is the Resy display name for the venue (e.g. "COQODAQ").
+	// Required when -release-strategy=notify-me so the email Source can
+	// match incoming alert subjects/bodies against the engine's
+	// VenueRef-keyed quest. Ignored by the other strategies.
+	venueName string
+
+	// IMAP config — required when -release-strategy=notify-me. The
+	// password itself is read from the env var named by imapPassEnv so
+	// it never appears in CLI history or process listings.
+	imapAddr     string
+	imapUser     string
+	imapPassEnv  string
+	imapMailbox  string
+	imapMinPoll  time.Duration
 	// user is the email address that identifies which persisted
 	// session to load before running a snipe. When empty, the snipe
 	// path skips the session-load step and the engine will (in a
@@ -98,6 +113,18 @@ func parseFlags(args []string, out io.Writer) (cliOptions, error) {
 	fs.StringVar(&opts.user, "user", "",
 		"Email of the previously logged-in user; loads the persisted Resy session. "+
 			"Run `resy-snipe login` first to populate.")
+	fs.StringVar(&opts.venueName, "venue-name", "",
+		"Resy display name for the venue (e.g. \"COQODAQ\"). Required with -release-strategy=notify-me.")
+	fs.StringVar(&opts.imapAddr, "imap-addr", "",
+		"IMAP host:port for -release-strategy=notify-me (e.g. imap.gmail.com:993).")
+	fs.StringVar(&opts.imapUser, "imap-user", "",
+		"IMAP username/email for -release-strategy=notify-me.")
+	fs.StringVar(&opts.imapPassEnv, "imap-pass-env", "RESY_SNIPE_IMAP_PASS",
+		"Name of the env var holding the IMAP password (Gmail: an app password).")
+	fs.StringVar(&opts.imapMailbox, "imap-mailbox", "INBOX",
+		"IMAP mailbox to watch for Resy alerts.")
+	fs.DurationVar(&opts.imapMinPoll, "imap-min-poll", 0,
+		"IMAP polling cadence floor. Zero uses the email Source default (5s).")
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, fmt.Errorf("parsing flags: %w", err)
 	}
