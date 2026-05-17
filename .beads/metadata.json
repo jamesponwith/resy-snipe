@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "resy_snipe",
+  "project_id": "2c3f5a38-5fd3-43a4-b241-283814d6cc61"
+}
