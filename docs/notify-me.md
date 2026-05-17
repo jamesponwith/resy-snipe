@@ -56,11 +56,27 @@ distinguish it from a `DiscoveredRelease` discovering event.
 
 ## Two ways to run it
 
-### `resy-snipe watch` — multi-venue mini-daemon (recommended)
+### Easiest: `scripts/notify-launch.sh`
 
-One process, multiple watches, shared IMAP connection. Config in
-[`docs/examples/watch.toml`](examples/watch.toml). Survives shell exit
-with `nohup`:
+```bash
+scripts/notify-launch.sh                           # uses docs/examples/watch.toml
+scripts/notify-launch.sh path/to/your-watch.toml   # custom config
+```
+
+The script builds the binary, prompts silently for the Gmail app
+password if it's not already in the environment, stops any
+previously-running watch, launches the new one under `nohup`, and
+tails the log. Ctrl-C detaches; the watch keeps running.
+
+**Cross-venue dedup**: if multiple `[[watches]]` entries share the
+same `(user, date)`, only the first one to land an alert attempts to
+book — the rest cancel cleanly with reason
+`duplicate_already_booked`. Useful when 4 Charles and Torrisi both
+fire for the same dinner night.
+
+### Manual: `resy-snipe watch`
+
+If you'd rather wire the steps yourself:
 
 ```bash
 export RESY_SNIPE_IMAP_PASS='your-gmail-app-password'

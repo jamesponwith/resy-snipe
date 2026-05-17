@@ -257,6 +257,7 @@ func runWatchCmd(ctx context.Context, args []string, _ io.Reader, out io.Writer,
 	defer func() { _ = notifier.Close() }()
 
 	clientAdapter := &clientAdapter{inner: rclient}
+	dedup := newDedupTracker()
 
 	var wg sync.WaitGroup
 	for _, w := range cfg.Watches {
@@ -275,7 +276,7 @@ func runWatchCmd(ctx context.Context, args []string, _ io.Reader, out io.Writer,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			driveOneWatch(runCtx, eng, sess, intent, w, notifier, logger)
+			driveOneWatch(runCtx, eng, sess, intent, w, notifier, dedup, logger)
 		}()
 	}
 
@@ -356,6 +357,57 @@ func prepareWatchIntent(
 	return intent, &resySessionWrapper{inner: sess}, nil
 }
 
+// dedupTracker prevents the watch process from booking more than one
+// reservation for the same (user, date) pair across all its in-flight
+// watches. The booking race is fully concurrent — every watch races
+// independently — so the tracker is the synchronization point that
+// turns "first to win" into "winner blocks the rest from trying."
+//
+// Scope is in-process only: a pre-existing reservation booked outside
+// this watch (or by an earlier run) is not detected. That requires a
+// "list my reservations" call to Resy and is a separate piece of
+// work.
+type dedupTracker struct {
+	mu     sync.Mutex
+	booked map[dedupKey]string // value: snipeID that won the slot, for diagnostics
+}
+
+type dedupKey struct {
+	user domain.UserID
+	date domain.Date
+}
+
+func newDedupTracker() *dedupTracker {
+	return &dedupTracker{booked: make(map[dedupKey]string)}
+}
+
+// claim atomically reserves (user, date) for the supplied snipeID.
+// Returns the winning snipeID and ok=true if the claim succeeded; if
+// another snipe already claimed the slot, returns that snipeID and
+// ok=false.
+func (d *dedupTracker) claim(user domain.UserID, date domain.Date, snipeID domain.SnipeID) (string, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	k := dedupKey{user: user, date: date}
+	if existing, taken := d.booked[k]; taken {
+		return existing, false
+	}
+	d.booked[k] = string(snipeID)
+	return string(snipeID), true
+}
+
+// release removes a claim. Called when a snipe's booking race ends
+// without a confirmation — the (user, date) goes back to "available"
+// so a later-firing watch on the same night can still try.
+func (d *dedupTracker) release(user domain.UserID, date domain.Date, snipeID domain.SnipeID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	k := dedupKey{user: user, date: date}
+	if existing, ok := d.booked[k]; ok && existing == string(snipeID) {
+		delete(d.booked, k)
+	}
+}
+
 // resySessionWrapper bridges *resy.Session to providers.Session. The
 // engine's booking race takes providers.Session; the resy adapter
 // returns *resy.Session. Since *resy.Session already implements the
@@ -376,8 +428,12 @@ func (w *resySessionWrapper) User() domain.UserID         { return w.inner.User(
 func (w *resySessionWrapper) ExpiresAt() time.Time        { return w.inner.ExpiresAt() }
 
 // driveOneWatch is the per-snipe lifecycle: Submit, Run (release
-// strategy loop), then RunBookingRace on Awaiting. Mirrors runSnipe's
-// shape so terminal-result semantics are identical to the CLI.
+// strategy loop), then a dedup pre-check + RunBookingRace on
+// Awaiting. Mirrors runSnipe's shape so terminal-result semantics are
+// identical to the CLI, with the addition of the dedup gate: only
+// one snipe per (user, date) gets to attempt a booking. Late-firing
+// duplicates transition to Canceled with reason
+// duplicate_already_booked.
 func driveOneWatch(
 	ctx context.Context,
 	eng *engine.Engine,
@@ -385,6 +441,7 @@ func driveOneWatch(
 	intent domain.Intent,
 	w WatchEntry,
 	notifier notify.Notifier,
+	dedup *dedupTracker,
 	logger *slog.Logger,
 ) {
 	log := logger.With(
@@ -419,11 +476,38 @@ func driveOneWatch(
 		return
 	}
 
+	// Dedup pre-check. If another watch already claimed (user, date),
+	// cancel this one before the booking race burns a Find/Book on a
+	// slot we don't want.
+	winner, claimed := dedup.claim(intent.User, intent.Date, id)
+	if !claimed {
+		log.Info("watch: skipping duplicate; another snipe already holds this (user, date)",
+			slog.String("winner_snipe_id", winner),
+		)
+		if err := state.Transition(ctx, domain.StatusCanceled, domain.EventCanceled,
+			slog.String("reason", "duplicate_already_booked"),
+			slog.String("winner_snipe_id", winner),
+		); err != nil {
+			log.Error("watch: cancel duplicate", slog.String("err", err.Error()))
+		}
+		final, _ := eng.Load(ctx, id)
+		if final != nil {
+			emitTerminalResult(ctx, notifier, id, final, nil)
+		}
+		return
+	}
+
 	raceErr := eng.RunBookingRace(ctx, state, sess)
 	final, loadErr := eng.Load(ctx, id)
 	if loadErr != nil {
 		log.Error("watch: reload after race", slog.String("err", loadErr.Error()))
+		dedup.release(intent.User, intent.Date, id)
 		return
+	}
+	// Release the claim if the race didn't book — a later watch on
+	// the same night may still want a shot.
+	if final.Status() != domain.StatusBooked {
+		dedup.release(intent.User, intent.Date, id)
 	}
 	emitTerminalResult(ctx, notifier, id, final, raceErr)
 }
