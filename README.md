@@ -46,7 +46,7 @@ goes through one error taxonomy.
   produces `run 'resy-snipe login' first` instead of mid-snipe failure.
   Session lives in `~/.local/share/resy-snipe/db.sqlite` (or
   `XDG_DATA_HOME`).
-- **Three release strategies**:
+- **Four release strategies**:
   - **Explicit** — wake up at a known wall-clock time (e.g. midnight).
   - **Discovered** — poll Resy's calendar between `ProbeFrom` and
     `ProbeUntil`; the first time the target date appears available is
@@ -54,6 +54,12 @@ goes through one error taxonomy.
     snipe for the same venue defaults to Explicit.
   - **Continuous** — poll Find at the engine's PollFloor until a slot
     appears or `Until` elapses.
+  - **NotifyMe** — watch a Gmail inbox via IMAP for Resy NotifyMe
+    alert emails; when one fires for a tracked venue+date, transition
+    to the booking race. **Zero pre-fire requests to Resy.** See
+    [`docs/notify-quickstart.md`](docs/notify-quickstart.md) for the
+    one-page setup, [`docs/notify-me.md`](docs/notify-me.md) for the
+    architecture.
 - **Race-and-cancel booking**. PrepareSlot (`/3/details`) is serialized
   across candidates so we don't burn book_tokens we won't use; Confirm
   (`/3/book`) races in parallel goroutines under a shared cancellable

@@ -1,5 +1,8 @@
 # NotifyMeRelease strategy
 
+> **Just want to run it?** [`notify-quickstart.md`](notify-quickstart.md)
+> is the operational one-pager. This document is the architecture.
+
 `NotifyMeRelease` is the fourth release strategy
 ([`release-strategies.md`](release-strategies.md)). It lets a snipe
 sit dormant until an external alert fires for the target

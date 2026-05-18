@@ -10,6 +10,11 @@ schedules the engine. You no longer compute snipe-time by hand. See
 If you're new to v2 from v1, skim **§What changed from v1** at the
 bottom first.
 
+> **Just want NotifyMe (email-driven watching)?** Skip this page and
+> go straight to [`notify-quickstart.md`](notify-quickstart.md) — it's
+> the operational one-pager for `resy-snipe watch`. This page covers
+> the older quest-based path.
+
 ## Prerequisites
 
 - Go 1.25+

@@ -6,9 +6,14 @@ does it that way and *what stays true* across changes.
 
 ## Reading order
 
-**If you just want to use the binary**: jump to
-**[getting-started.md](getting-started.md)** — five-minute walkthrough
-from clone to live snipe, with troubleshooting.
+**If you just want to use the binary**:
+
+- **NotifyMe / email-driven watching** (recommended for long-running
+  multi-venue setups): [`notify-quickstart.md`](notify-quickstart.md)
+  is the operational one-pager for `resy-snipe watch`.
+- **Single-snipe / classic flow**: [`getting-started.md`](getting-started.md)
+  — five-minute walkthrough for a one-shot snipe against a known drop
+  time or polling window.
 
 If you're new to the codebase, read in this order:
 
@@ -16,7 +21,7 @@ If you're new to the codebase, read in this order:
    the seams that matter. ~5 min.
 2. **[state-machine.md](state-machine.md)** — the lifecycle every
    snipe walks and the transition table. ~5 min.
-3. **[release-strategies.md](release-strategies.md)** — the three ways
+3. **[release-strategies.md](release-strategies.md)** — the four ways
    a snipe can wait for inventory. ~5 min.
 4. **[invariants.md](invariants.md)** — properties the system promises
    to preserve. Read before refactoring anything load-bearing. ~10 min.
@@ -24,6 +29,8 @@ If you're new to the codebase, read in this order:
    enforce. Read once; refer back. ~5 min.
 
 For specific topics:
+- **[notify-me.md](notify-me.md)** — architecture of the email-driven
+  alerts.Source and the NotifyMeRelease engine path.
 - **[anti-bot.md](anti-bot.md)** — Resy's defense surface and our gaps.
 - **[signers.md](signers.md)** — what a "signer" is, why it lives outside the Go binary, when you need one, and how to debug.
 - **[opentable-mapping.md](opentable-mapping.md)** — design exercise
