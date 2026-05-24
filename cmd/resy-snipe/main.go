@@ -91,7 +91,7 @@ func run(args []string, stdin io.Reader, logOut io.Writer, clk clock.Clock) erro
 			return fmt.Errorf("login bootstrap: %w", err)
 		}
 		defer func() { _ = cleanup() }()
-		return runLogin(ctx, stdin, logOut, client)
+		return runLogin(ctx, args[1:], stdin, logOut, client)
 	}
 
 	opts, err := parseFlags(args, logOut)

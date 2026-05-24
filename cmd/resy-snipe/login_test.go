@@ -76,6 +76,13 @@ func (f *fakeAuthClient) LoadSession(_ context.Context, _ domain.UserID) (*resy.
 	return f.loadSession, nil
 }
 
+func (f *fakeAuthClient) ImportSession(_ context.Context, _ domain.UserID, _ string) (*resy.Session, error) {
+	if f.loginErr != nil {
+		return nil, f.loginErr
+	}
+	return f.loginSession, nil
+}
+
 // loginFixedExp is the canonical session expiry the login tests pin —
 // well in the future relative to fixedNow so the rendered "expires"
 // string is stable across machines.
@@ -129,7 +136,7 @@ func TestRunLogin_Success(t *testing.T) {
 
 	stdin := strings.NewReader("user@example.com\npw-secret\n")
 	var out bytes.Buffer
-	if err := runLogin(context.Background(), stdin, &out, c); err != nil {
+	if err := runLogin(context.Background(), nil, stdin, &out, c); err != nil {
 		t.Fatalf("runLogin: %v", err)
 	}
 	if c.gotEmail != "user@example.com" {
@@ -163,7 +170,7 @@ func TestRunLogin_MFAStubSurfacesNotImplemented(t *testing.T) {
 
 	stdin := strings.NewReader("user@example.com\npw\n123456\n")
 	var out bytes.Buffer
-	err := runLogin(context.Background(), stdin, &out, c)
+	err := runLogin(context.Background(), nil, stdin, &out, c)
 	if err == nil {
 		t.Fatal("expected an error when CompleteMFA stub fires")
 	}
@@ -196,7 +203,7 @@ func TestRunLogin_MFASuccessRendersConfirmation(t *testing.T) {
 
 	stdin := strings.NewReader("user@example.com\npw\n123456\n")
 	var out bytes.Buffer
-	if err := runLogin(context.Background(), stdin, &out, c); err != nil {
+	if err := runLogin(context.Background(), nil, stdin, &out, c); err != nil {
 		t.Fatalf("runLogin: %v", err)
 	}
 	if !strings.Contains(out.String(), "Logged in as user@example.com") {
@@ -209,7 +216,7 @@ func TestRunLogin_RejectsEmptyEmail(t *testing.T) {
 	c := &fakeAuthClient{}
 	stdin := strings.NewReader("\n")
 	var out bytes.Buffer
-	err := runLogin(context.Background(), stdin, &out, c)
+	err := runLogin(context.Background(), nil, stdin, &out, c)
 	if err == nil || !strings.Contains(err.Error(), "email") {
 		t.Fatalf("expected email-required error, got %v", err)
 	}
@@ -223,7 +230,7 @@ func TestRunLogin_RejectsEmptyPassword(t *testing.T) {
 	c := &fakeAuthClient{}
 	stdin := strings.NewReader("u@x.io\n\n")
 	var out bytes.Buffer
-	err := runLogin(context.Background(), stdin, &out, c)
+	err := runLogin(context.Background(), nil, stdin, &out, c)
 	if err == nil || !strings.Contains(err.Error(), "password") {
 		t.Fatalf("expected password-required error, got %v", err)
 	}

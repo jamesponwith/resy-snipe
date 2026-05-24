@@ -80,10 +80,11 @@ func makeJWT(t *testing.T, exp time.Time) string {
 func newAuthClient(t *testing.T, srv *httptest.Server, c clock.Clock, store resy.SessionStore) *resy.Client {
 	t.Helper()
 	opts := []resy.Option{
-		resy.WithBaseURL(srv.URL),
 		resy.WithAPIKey("test-key"),
-		resy.WithHTTPClient(srv.Client()),
 		resy.WithUserAgent("test-ua"),
+	}
+	if srv != nil {
+		opts = append(opts, resy.WithBaseURL(srv.URL), resy.WithHTTPClient(srv.Client()))
 	}
 	if store != nil {
 		opts = append(opts, resy.WithStore(store))
@@ -144,6 +145,72 @@ func TestLoginPersistsSessionAndParsesExp(t *testing.T) {
 	}
 	if !stored.ExpiresAt.Equal(exp) {
 		t.Errorf("persisted exp: %v", stored.ExpiresAt)
+	}
+}
+
+func TestImportSessionRoundTripsJWT(t *testing.T) {
+	t.Parallel()
+	exp := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	token := makeJWT(t, exp)
+
+	store := &memSessionStore{}
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	// No server: ImportSession does not hit the network.
+	c := newAuthClient(t, nil, clock.NewFake(now), store)
+
+	sess, err := c.ImportSession(context.Background(), "jponwith@sandiego.edu", token)
+	if err != nil {
+		t.Fatalf("ImportSession: %v", err)
+	}
+	if sess.User() != "jponwith@sandiego.edu" {
+		t.Errorf("user: %q", sess.User())
+	}
+	if !sess.ExpiresAt().Equal(exp) {
+		t.Errorf("exp: got %v want %v", sess.ExpiresAt(), exp)
+	}
+	if sess.JWT() != token {
+		t.Errorf("token round-trip lost")
+	}
+
+	stored, err := store.GetSession(context.Background(), "jponwith@sandiego.edu", "resy", now)
+	if err != nil {
+		t.Fatalf("store.GetSession: %v", err)
+	}
+	if stored.JWT != token {
+		t.Errorf("persisted token: %q", stored.JWT)
+	}
+}
+
+func TestImportSessionRejectsExpiredJWT(t *testing.T) {
+	t.Parallel()
+	past := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	token := makeJWT(t, past)
+
+	store := &memSessionStore{}
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	c := newAuthClient(t, nil, clock.NewFake(now), store)
+
+	_, err := c.ImportSession(context.Background(), "u@x.io", token)
+	if err == nil {
+		t.Fatal("expected error on already-expired token")
+	}
+	if !errors.Is(err, providers.ErrAuthExpired) {
+		t.Errorf("err not classifiable as ErrAuthExpired: %v", err)
+	}
+	if _, getErr := store.GetSession(context.Background(), "u@x.io", "resy", now); getErr == nil {
+		t.Error("expired-token import must not persist a session")
+	}
+}
+
+func TestImportSessionRejectsMalformedJWT(t *testing.T) {
+	t.Parallel()
+	c := newAuthClient(t, nil, clock.NewFake(time.Now()), &memSessionStore{})
+	cases := []string{"", "not-a-jwt", "only.two.parts.too.many"}
+	for _, raw := range cases {
+		_, err := c.ImportSession(context.Background(), "u@x.io", raw)
+		if err == nil {
+			t.Errorf("expected error for raw=%q", raw)
+		}
 	}
 }
 

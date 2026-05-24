@@ -21,13 +21,32 @@ arrive and the watcher has nothing to act on.
 
 ### 2. Resy: log into resy-snipe so the session is sealed
 
+Two paths depending on what kind of Resy account you have:
+
+**A. Email + password account (most common)** — interactive prompt:
+
 ```bash
 resy-snipe login -user jponwith@sandiego.edu
 ```
 
-Interactive — paste your Resy password when prompted. The JWT lands
-in `~/Library/Application Support/resy-snipe/db.sqlite` and is
-re-used by every subsequent run.
+Paste your Resy password when prompted.
+
+**B. Phone-based account (no settable password)** — import a JWT
+you've captured from the mobile app or browser DevTools:
+
+```bash
+read -s -p "Resy JWT: " RESY_AUTH_TOKEN
+export RESY_AUTH_TOKEN
+resy-snipe login -user jponwith@sandiego.edu -token-env RESY_AUTH_TOKEN
+```
+
+The login command parses the JWT's `exp` claim, refuses to import an
+already-expired token, and seals it under the supplied user. When
+the token expires, re-capture and re-run.
+
+Either way: the session lands in
+`~/Library/Application Support/resy-snipe/db.sqlite` and is re-used
+by every subsequent run until expiry.
 
 ### 3. Gmail: enable 2-Step Verification + create an app password
 

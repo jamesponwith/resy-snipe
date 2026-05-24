@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"resy-snipe/internal/clock"
@@ -25,6 +27,7 @@ type authClient interface {
 	Login(ctx context.Context, creds resy.Credentials) (*resy.Session, error)
 	CompleteMFA(ctx context.Context, challenge, code string) (*resy.Session, error)
 	LoadSession(ctx context.Context, user domain.UserID) (*resy.Session, error)
+	ImportSession(ctx context.Context, user domain.UserID, jwt string) (*resy.Session, error)
 }
 
 // clientAdapter wraps *resy.Client to expose the typed Login signature
@@ -46,6 +49,10 @@ func (a *clientAdapter) CompleteMFA(ctx context.Context, challenge, code string)
 
 func (a *clientAdapter) LoadSession(ctx context.Context, user domain.UserID) (*resy.Session, error) {
 	return a.inner.LoadSession(ctx, user)
+}
+
+func (a *clientAdapter) ImportSession(ctx context.Context, user domain.UserID, jwt string) (*resy.Session, error) {
+	return a.inner.ImportSession(ctx, user, jwt)
 }
 
 // sessionStoreAdapter wraps *store.SQLiteStore so it satisfies
@@ -117,12 +124,39 @@ func fromStoreRow(s store.SessionRow) resy.SessionRow {
 // stdin must be a fresh reader; a bufio.Reader is wrapped over it so
 // the existing promptRaw helper from intent.go works unchanged. out
 // is where prompts and confirmation messages are written.
-func runLogin(ctx context.Context, stdin io.Reader, out io.Writer, client authClient) error {
+func runLogin(ctx context.Context, args []string, stdin io.Reader, out io.Writer, client authClient) error {
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	fs.SetOutput(out)
+	var (
+		userFlag    string
+		tokenEnv    string
+	)
+	fs.StringVar(&userFlag, "user", "",
+		"Resy account email. Required with -token-env; prompted otherwise.")
+	fs.StringVar(&tokenEnv, "token-env", "",
+		"Name of the env var holding a Resy JWT. When set, skips the email+password "+
+			"flow and imports the token directly — useful for phone-based accounts.")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(out, "Usage: resy-snipe login [-user <email>] [-token-env <ENV>]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if tokenEnv != "" {
+		return runLoginImportToken(ctx, out, client, userFlag, tokenEnv)
+	}
+
 	reader := bufio.NewReader(stdin)
 
-	email, err := promptRaw(reader, out, "Email", "")
-	if err != nil {
-		return fmt.Errorf("prompt email: %w", err)
+	email := strings.TrimSpace(userFlag)
+	if email == "" {
+		var err error
+		email, err = promptRaw(reader, out, "Email", "")
+		if err != nil {
+			return fmt.Errorf("prompt email: %w", err)
+		}
 	}
 	if email == "" {
 		return errors.New("login: email is required")
@@ -166,6 +200,38 @@ func runLogin(ctx context.Context, stdin io.Reader, out io.Writer, client authCl
 	}
 
 	return fmt.Errorf("login: %w", err)
+}
+
+// runLoginImportToken bypasses the interactive email+password flow by
+// reading a Resy JWT from the env var named tokenEnvName and sealing
+// it into the local session store under user. Used by callers whose
+// Resy account is phone-based (no settable password) and who have
+// captured a token from the mobile app or browser.
+//
+// The token is read from an env var (rather than a CLI flag) so it
+// never appears in shell history or process listings — same shape as
+// the IMAP password seam.
+func runLoginImportToken(
+	ctx context.Context,
+	out io.Writer,
+	client authClient,
+	user string,
+	tokenEnvName string,
+) error {
+	if strings.TrimSpace(user) == "" {
+		return errors.New("login: -user is required with -token-env")
+	}
+	token := os.Getenv(tokenEnvName)
+	if token == "" {
+		return fmt.Errorf("login: env var %q is empty (set it before invoking)", tokenEnvName)
+	}
+	sess, err := client.ImportSession(ctx, domain.UserID(user), token)
+	if err != nil {
+		return fmt.Errorf("login: %w", err)
+	}
+	fprintf(out, "Imported token for %s (session expires %s).\n",
+		sess.User(), sess.ExpiresAt().Format("2006-01-02 15:04:05 MST"))
+	return nil
 }
 
 // errNoSession is the sentinel surfaced when a snipe path tries to

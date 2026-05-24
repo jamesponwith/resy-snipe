@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"resy-snipe/internal/domain"
 	"resy-snipe/internal/providers"
@@ -118,6 +119,59 @@ func (c *Client) Login(ctx context.Context, creds providers.Credentials) (*Sessi
 		}
 		if err := c.store.UpsertSession(ctx, row); err != nil {
 			return nil, fmt.Errorf("resy.Login: persist session: %w", err)
+		}
+	}
+
+	return sess, nil
+}
+
+// ImportSession seals a pre-acquired JWT under the supplied user
+// identifier without going through Resy's password-based login flow.
+// The intended use case is phone-based Resy accounts where the user
+// has no settable password — they paste a JWT captured from the
+// mobile app or browser, we validate it parses + has not expired,
+// and we persist it like any other session.
+//
+// The returned *Session is identical in shape and lifecycle to one
+// from Login; LoadSession picks it up via the same code path.
+//
+// Returns providers.ErrAuthExpired (wrapped) if the JWT's exp claim
+// is already in the past. Other parsing/persist errors surface
+// wrapped so callers can errors.Is against the underlying cause.
+func (c *Client) ImportSession(ctx context.Context, user domain.UserID, jwt string) (*Session, error) {
+	if user == "" {
+		return nil, errors.New("resy.ImportSession: user is required")
+	}
+	if jwt == "" {
+		return nil, errors.New("resy.ImportSession: jwt is required")
+	}
+	exp, err := parseJWTExp(jwt)
+	if err != nil {
+		return nil, fmt.Errorf("resy.ImportSession: %w", err)
+	}
+	now := c.clock.Now()
+	if !exp.After(now) {
+		return nil, fmt.Errorf("resy.ImportSession: token already expired at %s: %w",
+			exp.Format(time.RFC3339), providers.ErrAuthExpired)
+	}
+
+	sess := &Session{
+		userID:    user,
+		jwt:       jwt,
+		expiresAt: exp,
+	}
+
+	if c.store != nil {
+		row := SessionRow{
+			UserID:    user,
+			Provider:  providerID,
+			JWT:       jwt,
+			ExpiresAt: exp,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := c.store.UpsertSession(ctx, row); err != nil {
+			return nil, fmt.Errorf("resy.ImportSession: persist session: %w", err)
 		}
 	}
 
