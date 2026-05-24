@@ -18,11 +18,11 @@
 # Prerequisite: each `user` below must have a stored Resy session.
 # Run `resy-snipe login -user <email>` once before starting watch mode.
 
-imap_addr     = "imap.gmail.com:993"
-imap_user     = "jponwith@sandiego.edu"
-imap_pass_env = "RESY_SNIPE_IMAP_PASS"
-mailbox       = "INBOX"
-# min_poll_interval = "5s"      # default; lower means more inbox round-trips
+imap_addr         = "imap.gmail.com:993"
+imap_user         = "jponwith@sandiego.edu"
+imap_pass_env     = "RESY_SNIPE_IMAP_PASS"
+mailbox           = "INBOX"
+min_poll_interval = "3s"          # tighter than the 5s default for drop-day responsiveness
 
 # Each [[watches]] entry is one NotifyMeRelease snipe. The display name
 # must match what Resy puts in the alert email body for that venue —
@@ -30,20 +30,20 @@ mailbox       = "INBOX"
 # entry. If you're unsure of the exact wording, run a 30s probe with
 # -release-strategy=notify-me and watch the parser logs.
 
+# 4 Charles Prime Rib — Sunday, June 14 2026. Drop is expected tomorrow
+# (May 25); ongoing NotifyMe alerts catch cancellations through the
+# reservation date. Brunch and dinner slots in one entry — engine
+# books the first available match.
 [[watches]]
 venue_id     = 834
 venue_name   = "4 Charles Prime Rib"
-date         = "2026-05-22"
+date         = "2026-06-14"
 party_size   = 2
-res_times    = ["17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00"]
-retry_window = "168h"            # six days — covers the window through dinner
-user         = "jponwith@sandiego.edu"
-
-[[watches]]
-venue_id     = 64593
-venue_name   = "Torrisi"
-date         = "2026-05-22"
-party_size   = 2
-res_times    = ["17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00"]
-retry_window = "168h"
+res_times    = [
+  # brunch 11:00–16:00
+  "11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00",
+  # dinner 17:00–21:00
+  "17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30","21:00",
+]
+retry_window = "530h"            # ~22 days; covers from now through end-of-day June 14
 user         = "jponwith@sandiego.edu"
