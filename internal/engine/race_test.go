@@ -61,7 +61,7 @@ func (f *fakePreparer) ConfirmSlot(ctx context.Context, slot providers.Slot, _ p
 	return fn(ctx, slot, idempotencyKey)
 }
 
-func newRaceFixture(t *testing.T, fp *fakePreparer) *engine.Engine {
+func newRaceFixture(t *testing.T, fp *fakePreparer, extra ...engine.Option) *engine.Engine {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(context.Background(), dir+"/race.db")
@@ -79,13 +79,14 @@ func newRaceFixture(t *testing.T, fp *fakePreparer) *engine.Engine {
 	// We compensate by using a tight PollFloor so the test finishes
 	// quickly.
 	c := clock.NewReal()
-	eng := engine.New(s, c, discardLogger(),
+	opts := append([]engine.Option{
 		engine.WithProvider(fp),
 		engine.WithBookingPolicy(domain.BookingPolicy{
 			PollFloor:     time.Millisecond, // tight; tests don't care about anti-bot floor
 			MaxConcurrent: 4,
 		}),
-	)
+	}, extra...)
+	eng := engine.New(s, c, discardLogger(), opts...)
 	return eng
 }
 
@@ -187,6 +188,33 @@ func awaitingState(t *testing.T, eng *engine.Engine) *engine.SnipeState {
 		}
 	}
 	return s
+}
+
+func TestRunBookingRace_DryRunArmsWithoutBooking(t *testing.T) {
+	t.Parallel()
+	pre := newRacePreparer("tok-B")
+	eng := newRaceFixture(t, pre, engine.WithBookingDryRun())
+	state := awaitingState(t, eng)
+
+	if err := eng.RunBookingRace(context.Background(), state, fakeSession(t)); err != nil {
+		t.Fatalf("RunBookingRace (dry-run): %v", err)
+	}
+
+	// The whole point: PrepareSlot proved the path, but /3/book never fired.
+	if got := pre.confirmCalls.Load(); got != 0 {
+		t.Errorf("dry-run must not call ConfirmSlot; got %d calls", got)
+	}
+	if got := pre.prepareCalls.Load(); got == 0 {
+		t.Error("dry-run should still PrepareSlot at least once to mint a book_token")
+	}
+
+	final, err := eng.Load(context.Background(), state.ID())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if final.Status() != domain.StatusCanceled {
+		t.Errorf("dry-run final status = %s, want %s", final.Status(), domain.StatusCanceled)
+	}
 }
 
 func TestRunBookingRace_FirstSuccessWins(t *testing.T) {

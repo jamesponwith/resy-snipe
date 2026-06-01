@@ -16,13 +16,21 @@
 #     echo "watch PID: $!"
 #
 # Prerequisite: each `user` below must have a stored Resy session.
-# Run `resy-snipe login -user <email>` once before starting watch mode.
+# Either run `resy-snipe login -user <email> -token-env RESY_AUTH_TOKEN`
+# once, or simply export RESY_AUTH_TOKEN — watch auto-seeds a session
+# from it when the store has none.
+#
+# SAFE FIRST RUN: set `dry_run = true` below to validate the whole path
+# (alert → Find → PrepareSlot → book_token mint) WITHOUT placing a real
+# reservation. The snipe ends Canceled (reason=dry_run_armed). Flip it
+# off once you've confirmed an alert arms cleanly.
 
 imap_addr         = "imap.gmail.com:993"
 imap_user         = "jponwith@sandiego.edu"
 imap_pass_env     = "RESY_SNIPE_IMAP_PASS"
 mailbox           = "INBOX"
 min_poll_interval = "3s"          # tighter than the 5s default for drop-day responsiveness
+# dry_run         = true          # arm-only: never POST /3/book (validation)
 
 # Each [[watches]] entry is one NotifyMeRelease snipe. The display name
 # must match what Resy puts in the alert email body for that venue —

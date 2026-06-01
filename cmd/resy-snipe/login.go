@@ -128,8 +128,8 @@ func runLogin(ctx context.Context, args []string, stdin io.Reader, out io.Writer
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var (
-		userFlag    string
-		tokenEnv    string
+		userFlag string
+		tokenEnv string
 	)
 	fs.StringVar(&userFlag, "user", "",
 		"Resy account email. Required with -token-env; prompted otherwise.")
@@ -246,12 +246,36 @@ var errNoSession = errors.New("no valid session — run 'resy-snipe login' first
 // same in both cases (the spec is explicit: "expired session triggers
 // a useful 'run resy-snipe login' message rather than mid-snipe
 // failure"). Other errors are returned wrapped.
+// defaultAuthTokenEnv is the env var the snipe/watch paths auto-seed a
+// session from when the store has no live one. It is the no-flag
+// convenience counterpart to `login -token-env <ENV>`: exporting
+// RESY_AUTH_TOKEN is enough to arm a watch without a separate login
+// step. The explicit command remains the way to name a different env
+// var or to verify a token before relying on it.
+const defaultAuthTokenEnv = "RESY_AUTH_TOKEN"
+
 func loadSessionForSnipe(ctx context.Context, client authClient, user domain.UserID, logger *slog.Logger) (*resy.Session, error) {
 	sess, err := client.LoadSession(ctx, user)
 	if err == nil {
 		return sess, nil
 	}
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrSessionExpired) {
+		// Auto-seed fallback: no live session in the store, but a raw JWT
+		// in RESY_AUTH_TOKEN can stand one up on the fly. A bad or expired
+		// token degrades to errNoSession (import error logged) rather than
+		// crashing the snipe.
+		if token := strings.TrimSpace(os.Getenv(defaultAuthTokenEnv)); token != "" {
+			seeded, serr := client.ImportSession(ctx, user, token)
+			if serr == nil {
+				logger.Info("auto-seeded session from "+defaultAuthTokenEnv,
+					slog.String("user", string(user)),
+					slog.Time("expires_at", seeded.ExpiresAt()))
+				return seeded, nil
+			}
+			logger.Warn("ignoring "+defaultAuthTokenEnv+": import failed",
+				slog.String("user", string(user)),
+				slog.String("err", serr.Error()))
+		}
 		logger.Debug("no usable session",
 			slog.String("user", string(user)),
 			slog.String("reason", err.Error()))

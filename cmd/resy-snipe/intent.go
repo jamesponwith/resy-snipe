@@ -45,6 +45,12 @@ type cliOptions struct {
 	pollInterval    time.Duration
 	logLevel        string
 
+	// dryRunBooking arms the snipe in arm-only mode: the booking race
+	// runs Find + PrepareSlot (proving the session, venue, and
+	// book_token mint) but never POSTs /3/book. Safe end-to-end
+	// validation without a committed reservation.
+	dryRunBooking bool
+
 	// venueName is the Resy display name for the venue (e.g. "COQODAQ").
 	// Required when -release-strategy=notify-me so the email Source can
 	// match incoming alert subjects/bodies against the engine's
@@ -54,11 +60,11 @@ type cliOptions struct {
 	// IMAP config — required when -release-strategy=notify-me. The
 	// password itself is read from the env var named by imapPassEnv so
 	// it never appears in CLI history or process listings.
-	imapAddr     string
-	imapUser     string
-	imapPassEnv  string
-	imapMailbox  string
-	imapMinPoll  time.Duration
+	imapAddr    string
+	imapUser    string
+	imapPassEnv string
+	imapMailbox string
+	imapMinPoll time.Duration
 	// user is the email address that identifies which persisted
 	// session to load before running a snipe. When empty, the snipe
 	// path skips the session-load step and the engine will (in a
@@ -96,6 +102,8 @@ func parseFlags(args []string, out io.Writer) (cliOptions, error) {
 	fs := flag.NewFlagSet("resy-snipe", flag.ContinueOnError)
 	fs.SetOutput(out)
 	fs.BoolVar(&opts.interactive, "interactive", false, "Prompt for settings interactively.")
+	fs.BoolVar(&opts.dryRunBooking, "dry-run-booking", false,
+		"Arm-only: run Find+PrepareSlot to validate the path, but never POST /3/book.")
 	fs.StringVar(&opts.resDate, "date", "", "Reservation date (YYYY-MM-DD).")
 	fs.IntVar(&opts.partySize, "party-size", -1, "Party size.")
 	fs.IntVar(&opts.venueID, "venue-id", -1, "Venue ID.")

@@ -30,6 +30,12 @@ type Engine struct {
 	alertSource alerts.Source
 	policy      domain.BookingPolicy
 
+	// dryRunBooking, when true, makes RunBookingRace stop after the
+	// first successful PrepareSlot instead of calling ConfirmSlot — it
+	// proves Find + venue + book_token mint end-to-end without POSTing
+	// /3/book (no committed reservation). See WithBookingDryRun.
+	dryRunBooking bool
+
 	// Subscriber registry for the lifecycle event stream. See
 	// subscribe.go for the public Subscribe / Notification surface.
 	// nextSubID is monotonic so emit can deliver in registration order.
@@ -59,6 +65,14 @@ func WithAlertSource(s alerts.Source) Option { return func(e *Engine) { e.alertS
 // can override per-snipe in a future Phase 2 extension; for now the
 // engine-level default applies to every snipe Run handles.
 func WithBookingPolicy(p domain.BookingPolicy) Option { return func(e *Engine) { e.policy = p } }
+
+// WithBookingDryRun arms the engine in "arm-only" mode: RunBookingRace
+// runs Find and PrepareSlot for the best candidate slot — proving the
+// session, venue, inventory, and book_token mint all work — then
+// transitions the snipe to Canceled (reason=dry_run_armed) WITHOUT
+// POSTing /3/book. It is the safe way to validate the email-alert →
+// booking path end-to-end before committing a real reservation.
+func WithBookingDryRun() Option { return func(e *Engine) { e.dryRunBooking = true } }
 
 // defaultBookingPolicy is the empirical safe baseline for Resy: 100ms
 // minimum interval between consecutive provider calls (anti-bot

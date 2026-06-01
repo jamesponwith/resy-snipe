@@ -53,10 +53,15 @@ func runSnipe(
 	notifier notify.Notifier,
 	logger *slog.Logger,
 	clk clock.Clock,
+	dryRunBooking bool,
 ) (domain.Status, error) {
 	opts := []engine.Option{engine.WithProvider(provider)}
 	if alertSource != nil {
 		opts = append(opts, engine.WithAlertSource(alertSource))
+	}
+	if dryRunBooking {
+		opts = append(opts, engine.WithBookingDryRun())
+		logger.Warn("snipe: DRY-RUN mode — booking race will arm but never POST /3/book")
 	}
 	eng := engine.New(s, clk, logger, opts...)
 

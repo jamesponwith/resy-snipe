@@ -43,6 +43,11 @@ type fakeAuthClient struct {
 	loadErr     error
 	loadSession *resy.Session
 
+	importErr     error
+	importSession *resy.Session
+	importCalls   int32
+	gotImportTok  string
+
 	gotEmail    string
 	gotPassword string
 	gotChalleng string
@@ -76,7 +81,18 @@ func (f *fakeAuthClient) LoadSession(_ context.Context, _ domain.UserID) (*resy.
 	return f.loadSession, nil
 }
 
-func (f *fakeAuthClient) ImportSession(_ context.Context, _ domain.UserID, _ string) (*resy.Session, error) {
+func (f *fakeAuthClient) ImportSession(_ context.Context, _ domain.UserID, token string) (*resy.Session, error) {
+	atomic.AddInt32(&f.importCalls, 1)
+	f.gotImportTok = token
+	// Prefer the dedicated import fields; fall back to the login fields
+	// so existing token-path tests that program loginSession/loginErr
+	// keep working.
+	if f.importErr != nil {
+		return nil, f.importErr
+	}
+	if f.importSession != nil {
+		return f.importSession, nil
+	}
 	if f.loginErr != nil {
 		return nil, f.loginErr
 	}
@@ -252,7 +268,7 @@ func TestLoadSessionForSnipe_LoadsPersistedSession(t *testing.T) {
 }
 
 func TestLoadSessionForSnipe_ExpiredSurfacesActionableMessage(t *testing.T) {
-	t.Parallel()
+	t.Setenv(defaultAuthTokenEnv, "") // no auto-seed token: test the bare expired path
 	c := &fakeAuthClient{
 		loadErr: fmt.Errorf("session %s/%s exp ...: %w",
 			"u", "resy", store.ErrSessionExpired),
@@ -271,7 +287,7 @@ func TestLoadSessionForSnipe_ExpiredSurfacesActionableMessage(t *testing.T) {
 }
 
 func TestLoadSessionForSnipe_MissingSurfacesActionableMessage(t *testing.T) {
-	t.Parallel()
+	t.Setenv(defaultAuthTokenEnv, "") // no auto-seed token: test the bare missing path
 	c := &fakeAuthClient{
 		loadErr: fmt.Errorf("session: %w", store.ErrNotFound),
 	}
@@ -386,6 +402,7 @@ func TestRun_DispatchesLoginSubcommand(t *testing.T) {
 func TestRun_SnipeWithUserFlag_ExpiredSession(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
+	t.Setenv(defaultAuthTokenEnv, "") // no auto-seed: assert the bare expired-session bail-out
 
 	// Seed the DB with an expired session for the user we'll target.
 	ctx := context.Background()
@@ -470,7 +487,7 @@ func TestRun_SnipeWithUserFlag_LoadsPersistedSession(t *testing.T) {
 	prev := runSnipeFn
 	t.Cleanup(func() { runSnipeFn = prev })
 	var called atomic.Int32
-	runSnipeFn = func(_ context.Context, _ domain.Intent, sess providers.Session, _ store.Store, _ providers.Provider, _ alerts.Source, _ notify.Notifier, _ *slog.Logger, _ clock.Clock) (domain.Status, error) {
+	runSnipeFn = func(_ context.Context, _ domain.Intent, sess providers.Session, _ store.Store, _ providers.Provider, _ alerts.Source, _ notify.Notifier, _ *slog.Logger, _ clock.Clock, _ bool) (domain.Status, error) {
 		called.Store(1)
 		if sess == nil {
 			t.Error("runSnipeFn: nil session — load failed silently")
@@ -514,5 +531,37 @@ func seedUser(t *testing.T, s *store.SQLiteStore, id string) {
 		 VALUES (?, NULL, ?, 'legacy-v1', 0)`,
 		"acct_legacy_"+id, id); err != nil {
 		t.Fatalf("seed user %q: %v", id, err)
+	}
+}
+
+func TestLoadSessionForSnipe_AutoSeedsFromEnvToken(t *testing.T) {
+	t.Setenv(defaultAuthTokenEnv, "env.jwt.tok")
+	sess := makeFakeSession(t, "u@x.io", loginFixedExp)
+	c := &fakeAuthClient{loadErr: store.ErrNotFound, importSession: sess}
+
+	got, err := loadSessionForSnipe(context.Background(), c, "u@x.io",
+		slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("loadSessionForSnipe (auto-seed): %v", err)
+	}
+	if got != sess {
+		t.Error("expected the auto-seeded session to be returned")
+	}
+	if c.importCalls != 1 || c.gotImportTok != "env.jwt.tok" {
+		t.Errorf("ImportSession not invoked as expected; calls=%d tok=%q", c.importCalls, c.gotImportTok)
+	}
+}
+
+func TestLoadSessionForSnipe_BadEnvTokenFallsToErrNoSession(t *testing.T) {
+	t.Setenv(defaultAuthTokenEnv, "bad.tok")
+	c := &fakeAuthClient{loadErr: store.ErrNotFound, importErr: errors.New("token already expired")}
+
+	_, err := loadSessionForSnipe(context.Background(), c, "u@x.io",
+		slog.New(slog.DiscardHandler))
+	if !errors.Is(err, errNoSession) {
+		t.Errorf("err = %v, want errNoSession when import fails", err)
+	}
+	if c.importCalls != 1 {
+		t.Errorf("expected one import attempt; calls=%d", c.importCalls)
 	}
 }

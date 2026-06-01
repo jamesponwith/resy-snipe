@@ -7,6 +7,15 @@
 # bv (beads viewer) local config and caches
 .bv/
 
+# Secrets / local env — NEVER commit (holds RESY_AUTH_TOKEN, API key, IMAP pass)
+.env
+*.env
+!.env.example
+
+# Local scratch / capture artifacts
+charles.log
+demo.tape
+
 # Build artifacts
 /bin/
 /resy-snipe

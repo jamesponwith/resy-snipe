@@ -113,6 +113,23 @@ func (e *Engine) RunBookingRace(ctx context.Context, state *SnipeState, sess pro
 			continue
 		}
 
+		// Dry-run gate: the prepared slot carries a freshly minted
+		// book_token, which proves the whole path up to (but not
+		// including) /3/book works. Stop here without booking.
+		if e.dryRunBooking {
+			e.log.LogAttrs(ctx, slog.LevelInfo, "engine.RunBookingRace: dry-run armed (no /3/book)",
+				slog.String(domain.LogKeySnipeID, string(state.ID())),
+				slog.String(domain.LogKeyVenueRef, intent.Venue.String()),
+				slog.String("would_book_time", prepared.Time.String()),
+				slog.String("would_book_table", prepared.TableType),
+			)
+			return state.Transition(ctx, domain.StatusCanceled, domain.EventCanceled,
+				slog.String("reason", "dry_run_armed"),
+				slog.String("would_book_time", prepared.Time.String()),
+				slog.String("would_book_table", prepared.TableType),
+			)
+		}
+
 		wg.Add(1)
 		go func(idx int, s providers.Slot) {
 			defer wg.Done()

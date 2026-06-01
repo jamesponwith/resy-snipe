@@ -173,7 +173,7 @@ func run(args []string, stdin io.Reader, logOut io.Writer, clk clock.Clock) erro
 	}
 	defer alertCleanup()
 
-	finalStatus, snipeErr := runSnipeFn(parent, intent, sess, sqlStore, provider, alertSource, notifier, logger, clk)
+	finalStatus, snipeErr := runSnipeFn(parent, intent, sess, sqlStore, provider, alertSource, notifier, logger, clk, opts.dryRunBooking)
 	if snipeErr != nil {
 		return snipeErr
 	}

@@ -57,6 +57,12 @@ type WatchConfig struct {
 	Mailbox         string `toml:"mailbox"`
 	MinPollInterval string `toml:"min_poll_interval"`
 
+	// DryRun arms every watch in this process in arm-only mode: the
+	// booking race runs Find + PrepareSlot (proving the token, venue,
+	// and book_token mint) but never POSTs /3/book. Use it to validate
+	// the alert → booking path without committing a real reservation.
+	DryRun bool `toml:"dry_run"`
+
 	Watches []WatchEntry `toml:"watches"`
 }
 
@@ -66,7 +72,7 @@ type WatchConfig struct {
 type WatchEntry struct {
 	VenueID      int      `toml:"venue_id"`
 	VenueName    string   `toml:"venue_name"`
-	Date         string   `toml:"date"`          // YYYY-MM-DD
+	Date         string   `toml:"date"` // YYYY-MM-DD
 	PartySize    int      `toml:"party_size"`
 	ResTimes     []string `toml:"res_times"`     // ["19:00", "19:30", ...]
 	TableTypes   []string `toml:"table_types"`   // optional
@@ -249,10 +255,15 @@ func runWatchCmd(ctx context.Context, args []string, _ io.Reader, out io.Writer,
 	)
 
 	provider := &providerAdapter{Client: rclient}
-	eng := engine.New(sqlStore, clk, logger,
+	engOpts := []engine.Option{
 		engine.WithProvider(provider),
 		engine.WithAlertSource(src),
-	)
+	}
+	if cfg.DryRun {
+		engOpts = append(engOpts, engine.WithBookingDryRun())
+		logger.Warn("watch: DRY-RUN mode — booking race will arm but never POST /3/book")
+	}
+	eng := engine.New(sqlStore, clk, logger, engOpts...)
 	notifier := newCLINotifier(out, clk)
 	defer func() { _ = notifier.Close() }()
 
