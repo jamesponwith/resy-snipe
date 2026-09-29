@@ -1,0 +1,35 @@
+{
+  "snipe_date": "2026-08-16",
+  "snipe_time": "00:00",
+  "retry": "90s",
+  "decision_window": "3s",
+  "targets": [
+    {
+      "name": "Don Angie",
+      "venue_id": 1505,
+      "date": "2026-09-14",
+      "party_size": 2,
+      "res_times": ["18:45", "19:00", "19:15", "19:30", "19:45", "20:00"],
+      "table_types": [],
+      "priority": 1
+    },
+    {
+      "name": "Carbone",
+      "venue_id": 6194,
+      "date": "2026-09-14",
+      "party_size": 2,
+      "res_times": ["19:00", "19:30", "20:00"],
+      "table_types": [],
+      "priority": 2
+    },
+    {
+      "name": "Don Angie",
+      "venue_id": 1505,
+      "date": "2026-09-21",
+      "party_size": 2,
+      "res_times": ["19:00", "19:30", "20:00"],
+      "table_types": [],
+      "priority": 1
+    }
+  ]
+}

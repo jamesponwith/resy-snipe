@@ -1,6 +1,7 @@
 package resy
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -59,6 +60,86 @@ func (api *ResyAPI) PostReservation(paymentMethodID string, bookToken string) (s
 	}
 
 	return sendPostRequest(api.resyToken, "api.resy.com/3/book", params)
+}
+
+// SearchVenues looks up venues by name so venue IDs can be resolved without
+// digging through the booking widget's network traffic.
+func (api *ResyAPI) SearchVenues(query string) (string, error) {
+	fmt.Println("-- Venue search --")
+	return sendPostJSON(api.resyToken, "api.resy.com/3/venuesearch/search", map[string]interface{}{
+		"query":    query,
+		"per_page": 20,
+	})
+}
+
+// CreateNotify joins Resy's Notify waitlist for a venue/date/party size.
+//
+// UNVERIFIED: this payload is inferred from Resy's booking widget, not
+// confirmed against a live account. Callers surface the raw response so a
+// rejection can be diagnosed and this shape corrected.
+func (api *ResyAPI) CreateNotify(venueID int, date string, partySize int, startTime string, endTime string) (string, error) {
+	fmt.Printf("-- Notify -- venue %d %s party %d %s-%s\n", venueID, date, partySize, startTime, endTime)
+	return sendPostJSONAccepting(api.resyToken, "api.resy.com/3/notify", map[string]interface{}{
+		"venue_id":             venueID,
+		"day":                  date,
+		"party_size":           partySize,
+		"time_preferred_start": startTime,
+		"time_preferred_end":   endTime,
+		"service_type_id":      2, // dinner
+	}, []int{http.StatusOK, http.StatusCreated})
+}
+
+// sendPostJSON sends a JSON POST request and expects a 200 response.
+func sendPostJSON(resyKeys config.ResyKeys, baseURL string, payload interface{}) (string, error) {
+	return sendPostJSONAccepting(resyKeys, baseURL, payload, []int{http.StatusOK})
+}
+
+// sendPostJSONAccepting sends a JSON POST and treats any of okStatuses as
+// success, returning the raw body either way so failures stay diagnosable.
+func sendPostJSONAccepting(resyKeys config.ResyKeys, baseURL string, payload interface{}, okStatuses []int) (string, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s", baseURL), strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+
+	setCommonHeaders(req, resyKeys)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	for _, ok := range okStatuses {
+		if resp.StatusCode == ok {
+			return string(respBody), nil
+		}
+	}
+	return string(respBody), fmt.Errorf("request to %s failed: %s :: %s", baseURL, resp.Status, string(respBody))
+}
+
+// setCommonHeaders applies the auth and origin headers every Resy call needs.
+func setCommonHeaders(req *http.Request, resyKeys config.ResyKeys) {
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Authorization", fmt.Sprintf(`ResyAPI api_key="%s"`, resyKeys.ApiKey))
+	req.Header.Set("X-Resy-Universal-Auth", resyKeys.AuthToken)
+	req.Header.Set("x-resy-auth-token", resyKeys.AuthToken)
+	req.Header.Set("Origin", "https://widgets.resy.com")
+	req.Header.Set("Referer", "https://widgets.resy.com/")
+	req.Header.Set("X-Origin", "https://widgets.resy.com")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
 }
 
 // sendGetRequest sends a GET request

@@ -1,0 +1,23 @@
+# Credentials — never commit these
+.env
+.env.local
+
+# Personal snipe plans (targets.example.json is the committed template)
+targets.json
+targets.*.json
+!targets.example.json
+
+# Run logs
+logs/
+
+# Compiled binary (module name: resy-snipe)
+/resy-snipe
+
+# Go build/test artifacts
+*.exe
+*.test
+*.out
+
+# Personal snipe plans (hyphenated names) and built binaries
+targets-*.json
+/bin/

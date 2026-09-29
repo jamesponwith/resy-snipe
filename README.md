@@ -52,6 +52,17 @@ If you run with no flags:
 - `-table-types` Optional seating/table types, comma-separated. Use `none` for any.
 - `-snipe-date` Date to perform the snipe (defaults to reservation date).
 - `-snipe-time` Time to perform the snipe (24h clock).
+- `-retry` How long to keep retrying the availability search (default `60s`). Accepts Go durations such as `30s`, `2m`.
+- `-targets` Path to a JSON plan file describing multiple venue/date targets (see Batch plans).
+- `-decision-window` With `-targets`, how long to hold for a higher-priority venue once something becomes available (default `2s`).
+- `-validate` Check a `-targets` plan file and exit. Offline: no credentials, no network.
+- `-dry-run` Report what each venue is currently offering and exit. Books nothing and ignores the snipe schedule.
+- `-watch` Poll targets continuously and act on each target's `on_hit` policy. Ctrl-C to stop.
+- `-poll-interval` How often `-watch` polls (default `60s`). Below ~30s risks 429 rate limiting.
+- `-max-bookings` Cap on total auto-bookings during `-watch` (default `1`, `0` = unlimited).
+- `-alert-log` Append-only JSON log of alerts and bookings (default `logs/alerts.jsonl`).
+- `-notify` Join Resy's Notify waitlist for targets with `"notify": true`, then exit.
+- `-find-venue` Look up venue IDs by name and exit.
 
 ### Examples
 Run at midnight tonight (local time), booking 7 days out (default date), Dead Rabbit, party of 2:
@@ -76,8 +87,105 @@ Interactive prompt mode:
 go run . -interactive
 ```
 
+## Batch plans (multiple venues and nights)
+A plan file snipes several venue/date combinations in one run:
+
+```bash
+go run . -validate -targets targets.json   # check the file offline
+go run . -dry-run  -targets targets.json   # check availability, book nothing
+go run . -targets targets.json             # run for real
+```
+
+Work up through those three: `-validate` needs neither credentials nor network, `-dry-run` proves the credentials and venue IDs work without booking anything, and only the third can create a reservation.
+
+`-dry-run` prints every slot the venue is offering, not just the ones you asked for, so it doubles as a way to discover which times and table types a venue actually returns:
+
+```
+Don Angie (1505) 2026-09-14
+  14 slot(s) offered across 7 start time(s):
+    17:45:00  Dining Room
+    18:00:00  Bar, Dining Room
+    ...
+  matching your requested times: 3
+```
+
+### How competing targets are resolved
+Resy only allows one reservation per night, so targets are grouped by date:
+
+- **Within a night**, every target's availability is searched *concurrently* (searching is a read-only call), then booking happens *strictly in priority order* and stops at the first success. `priority: 1` is the most wanted. The losers are reported as `skipped`.
+- **Across nights**, groups are independent and run in parallel, so each night can land its own reservation.
+
+This covers both shapes: several venues competing for one night, and one venue across many nights.
+
+### The decision window
+If a lower-priority venue reports availability first, the group waits `decision_window` for a higher priority to land before committing. Set it to `0` to always grab the first thing available. Longer windows favour getting the venue you actually want; shorter ones favour getting *something* before the slot is taken.
+
+### Plan format
+Priorities must be distinct within a night (the loader rejects ties, since a tie has no defined winner). Omit `priority` entirely to fall back to file order. Copy `targets.example.json` to start.
+
+```json
+{
+  "snipe_date": "2026-08-16",
+  "snipe_time": "00:00",
+  "retry": "90s",
+  "decision_window": "3s",
+  "targets": [
+    {"name": "Don Angie", "venue_id": 1505, "date": "2026-09-14",
+     "party_size": 2, "res_times": ["19:00", "19:30"], "table_types": [], "priority": 1}
+  ]
+}
+```
+
+`snipe_date` + `snipe_time` are when the process wakes up and fires; the per-target `date` is the night being booked. All targets in one file share a single snipe time — venues that drop at different times need separate plan files.
+
+## Watch mode (continuous monitoring)
+A snipe fires once at a scheduled drop. Watch mode instead polls indefinitely, which is what you want for cancellations that appear at random:
+
+```bash
+go run . -watch -targets targets.september.json
+```
+
+Each target chooses what happens on a hit via `on_hit`:
+
+- `"book"` (default) — reserve it automatically. Fastest, but spends a real reservation without you in the loop.
+- `"alert"` — notify you and do nothing else. You book manually.
+
+That lets one plan auto-book the restaurant you're sure about while only alerting on the others.
+
+### Guardrails
+Watching many nights with `on_hit: "book"` would otherwise reserve **one table per night**. Three things prevent that:
+
+- **`max_bookings`** (default `1`) caps total auto-bookings for the whole watch. Once reached, auto-booking stops but alert-only targets keep working.
+- **One reservation per night** — booking any target for a date stops all targets for that date.
+- Both are enforced by claiming a slot *before* booking, so concurrent polls cannot slip past the cap.
+
+### Alerts
+Alerts are **edge-triggered**: a target fires when it goes from unavailable to available, not on every poll, so an open table does not generate an alert per minute.
+
+Three sinks, and a failing one never blocks the others:
+- **Terminal** — always on, with a bell.
+- **Log file** — one JSON object per line at `-alert-log`, for auditing what ran unattended.
+- **Email** — opt-in via `ALERT_EMAIL_TO`. Gmail requires an App Password in `SMTP_PASS`, not your account password. See `.env.example`.
+
+The two alert kinds mean different things: `TABLE OPEN` is actionable (go book it), while `BOOKED` is confirmation after the fact plus the reservation token.
+
+## Resy Notify waitlist
+Separately from polling, targets with `"notify": true` can join Resy's own Notify waitlist so Resy alerts you directly:
+
+```bash
+go run . -notify -targets targets.september.json
+```
+
+**Unverified:** the Notify request shape is inferred from Resy's booking widget and has not been confirmed against a live account. The command prints the raw response for every target so a rejection can be diagnosed and the payload in `resy/resy-api.go` corrected. Treat the local watcher as the reliable path until this is confirmed working.
+
 ## Venue IDs
-The CLI prints a venue menu in interactive mode based on constants in config (you can still enter a custom venue ID).
+Resolve a venue ID by name:
+
+```bash
+go run . -find-venue "4 Charles"
+```
+
+The CLI also prints a venue menu in interactive mode based on constants in config (you can still enter a custom venue ID).
 
 Current built-ins:
 - Dead Rabbit (`38660`)
@@ -96,6 +204,9 @@ To add more, extend the constants in `config/resy-config.go` and the `venueOptio
 ## Project layout
 - `resy-bot.go`: main CLI entrypoint (flags, interactive prompts, schedule, run workflow).
 - `config/resy-config.go`: environment-based auth keys, venue constants, default reservation details.
+- `config/targets.go`: plan file parsing and validation, reservation-time normalization.
+- `resy/resy-multi-target.go`: multi-venue/multi-night orchestration with per-night priority.
+- `resy/resy-venue-search.go`: venue ID lookup by name.
 - `resy/resy-api.go`: low-level HTTP requests to Resy endpoints (`/find`, `/details`, `/book`) plus headers.
 - `resy/resy-client.go`: parses find results into candidate booking config tokens, fetches booking details, books reservations.
 - `resy/resy-booking-workflow.go`: orchestration: find -> details -> book.
@@ -117,6 +228,8 @@ To add more, extend the constants in `config/resy-config.go` and the `venueOptio
 
 4) Concurrency model
 - If multiple config tokens match, the workflow spins a goroutine per token and attempts booking concurrently.
+- The first booking to succeed wins; its token is returned and later successes are discarded. All shared state is guarded by a mutex.
+- If every attempt fails, the errors are combined with `errors.Join` and returned together.
 
 ## Configuration
 Edit `config/resy-config.go` to change defaults:
@@ -124,14 +237,11 @@ Edit `config/resy-config.go` to change defaults:
 - Default venue / party size / date: `ReservationDetailss`
 - Default snipe time: `SnipeTimee`
 
-## Retry tuning (important)
-There are two key retry-related behaviors in the current code:
+## Retry tuning
 - The retry loop sleeps 10ms between attempts.
-- The retry window passed to `findReservations` is currently hard-coded to `2` inside the booking workflow (not the `Run(millisToRetry ...)` parameter).
+- The retry window is controlled by `-retry` and defaults to `60s`. It is threaded through `Run(retryFor)` into `findReservations`.
 
-Because the retry stop condition is measured in milliseconds, a value of `2` means "retry for ~2ms total," which is effectively one quick attempt.
-
-Recommended improvement: thread the intended retry duration through the workflow and pass a sensible window (for example, 30-120 seconds), and/or make it configurable via a CLI flag.
+Pass any Go duration string, for example `-retry 2m` to keep hunting for two minutes, or `-retry 0` to make a single attempt.
 
 ## Troubleshooting
 ### "No Hits"
@@ -139,8 +249,15 @@ The tool prints `No Hits` when it finds no matching slots for your requested tim
 
 Common causes:
 - Too narrow reservation times (try a wider range).
-- Table types don't match the venue's returned types.
-- Retry window is too short (see Retry tuning above).
+- Table types don't match the venue's returned types. A requested table type the venue never offered is treated as a miss, so the search keeps retrying instead of queueing an empty token.
+- Retry window is too short (see Retry tuning above); raise it with `-retry`.
+
+### Expired auth token (419 / "Unauthorized")
+`RESY_AUTH_TOKEN` is a JWT and expires every few months. The tool decodes its `exp` claim locally and refuses to start once it has lapsed, so you get a clear error instead of a 419 at the drop. It also checks the token against the *scheduled* snipe time, catching a token that works now but expires before the run fires.
+
+To refresh: log in at resy.com, open DevTools → Network, click any restaurant, and copy the `x-resy-auth-token` request header from a call to `api.resy.com`.
+
+`RESY_API_KEY` is long-lived and rarely needs changing.
 
 ### HTTP errors (401/403/429)
 - 401/403 typically indicates invalid/expired tokens or missing env vars. Tokens are read from `RESY_API_KEY` and `RESY_AUTH_TOKEN`.
@@ -152,16 +269,18 @@ When non-OK responses occur, the code reads and prints response body details and
 If your `-snipe-date`/`-snipe-time` is in the past, the computed duration will be negative. The tool will proceed immediately because `time.Sleep(duration)` effectively does not delay.
 
 ## Known limitations
-- Data race on booking result: concurrent goroutines write `resyToken` / `resyTokenErr` without synchronization; "last writer wins." Consider guarding with a mutex or returning the first successful booking.
-- Retry duration is not wired correctly: `Run(millisToRetry)` doesn't currently control the internal find retry window (hard-coded to 2).
 - Assumes at least one payment method: `getReservationDetails` uses the first payment method in the array without checking length.
+- One snipe time per plan file. Venues with different drop schedules need separate plan files and separate runs.
+- `-find-venue` targets `/3/venuesearch/search`; if Resy changes that endpoint's shape the command prints the raw response so it can be re-mapped.
+- Duplicate-booking guard is best-effort: a goroutine checks whether another slot already booked before it starts, but attempts already in flight are not cancelled. If two slots are booked simultaneously you may end up with two reservations.
+- `nil` table type ("any") picks an arbitrary table type via map iteration order, so the choice is not deterministic.
 
 ## Security tips
 - Never commit your `RESY_API_KEY` / `RESY_AUTH_TOKEN`. The app is already designed to read them from environment variables.
 - Consider using a local `.env` file + a loader (dotenv) for convenience (but keep it out of git).
 
 ## Development ideas
-- Add a `-retry-ms` / `-retry-seconds` flag and plumb it correctly through `ResyBookingWorkflow` -> `ResyClient`.
+- Cancel in-flight booking attempts once one succeeds (thread a `context.Context` through `ResyAPI`) to close the duplicate-booking window.
 - Add structured logging (request IDs, status codes, elapsed time).
 - Add a "dry run" mode: find + details without booking.
 - Add backoff and jitter to respect rate limits.
